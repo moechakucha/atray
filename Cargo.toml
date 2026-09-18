@@ -1,0 +1,48 @@
+[package]
+name = "atray"
+description = "Simple file relay tray; cross-platform alternative to Yoink"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.bundle]
+identifier = "moe.prwk.atray"
+icon = ["assets/icon.png", "assets/icon.icns"]
+category = "Utility"
+osx_minimum_system_version = "11.0"
+osx_info_plist_exts = ["assets/Info.plist.ext"]
+deb_depends = ["libc6", "libx11-6", "libxkbcommon0", "libwayland-client0"]
+
+[dependencies]
+anyhow = "1"
+findfont = "0.2.0"
+font-kit = "0.14.3"
+iced = { version = "0.14", features = ["advanced"] }
+image = "0.25.10"
+native-theme-iced = "0.5.8"
+# use git version so we have wayland
+rdev = { git = "https://github.com/Narsil/rdev.git", features = ["wayland", "x11"] }
+tempfile = "3"
+tray-icon = "0.25.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = "0.62"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.14"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+native-theme = { version = "0.5.8", features = ["macos"] }
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = [
+    "NSDragging",
+    "NSDraggingItem",
+    "NSDraggingSession",
+    "NSEvent",
+    "NSImage",
+    "NSPasteboard",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
