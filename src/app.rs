@@ -549,6 +549,9 @@ impl App {
             iced::stream::channel(100, move |mut output: mpsc::Sender<Message>| async move {
                 let (exit_tx, exit_rx) = oneshot::channel();
                 std::thread::spawn(move || {
+                    #[cfg(target_os = "macos")]
+                    rdev::set_is_main_thread(false);
+
                     if let Err(err) = rdev::listen(move |event| match event.event_type {
                         EventType::KeyPress(key) => {
                             output.try_send(Message::KeyPressed(key)).ok();
