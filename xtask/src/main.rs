@@ -507,9 +507,7 @@ fn build_dmg(sh: &Shell, metadata: &Metadata, args: &Args, app: &Path) -> Result
 
     fs::create_dir_all(&args.out)?;
 
-    let dmg = args
-        .out
-        .join(format!("{name}-{}-{}.dmg", metadata.version, args.arch()));
+    let dmg = args.out.join(format!("{name}-{}.dmg", args.arch()));
 
     if dmg.exists() {
         fs::remove_file(&dmg).with_context(|| format!("failed to clear {dmg:?}"))?;

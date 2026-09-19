@@ -94,4 +94,4 @@ tasks:
       done
 
 artifacts:
-  - atray/dist/*.dmg
+  - atray/dist/atray-aarch64.dmg
