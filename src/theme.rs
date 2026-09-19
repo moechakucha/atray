@@ -1,6 +1,6 @@
 use iced::theme::Mode;
 use iced::theme::palette as iced_palette;
-use iced::widget::container;
+use iced::widget::{button, container, pick_list, text_input};
 use iced::{Background, Border, Color, Theme};
 use native_theme_iced::{ColorMode, ResolvedTheme};
 
@@ -16,6 +16,7 @@ pub struct Colors {
     pub border_hover: Color,
     pub accent: Color,
     pub text: Color,
+    pub danger: Color,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,13 +81,7 @@ impl Colors {
         let dark = extended.is_dark;
         let background = base.background.scale_alpha(SURFACE_ALPHA);
 
-        let shade = |amount: f32| {
-            if dark {
-                iced_palette::lighten(background, amount)
-            } else {
-                iced_palette::darken(background, amount)
-            }
-        };
+        let shade = |amount: f32| shade(background, theme, amount);
 
         let (surface, card_hover, card_pressed, border, border_hover) = if dark {
             (
@@ -115,7 +110,12 @@ impl Colors {
             border_hover,
             accent: base.primary,
             text: base.text,
+            danger: base.danger,
         }
+    }
+
+    pub fn note(&self) -> Color {
+        self.text.scale_alpha(0.6)
     }
 }
 
@@ -181,5 +181,142 @@ pub fn tooltip(theme: &Theme) -> container::Style {
         },
         text_color: Some(colors.text),
         ..container::Style::default()
+    }
+}
+
+pub fn settings_window(theme: &Theme) -> container::Style {
+    let colors = Colors::of(theme);
+
+    container::Style {
+        background: Some(Background::Color(colors.surface)),
+        text_color: Some(colors.text),
+        ..container::Style::default()
+    }
+}
+
+pub fn settings_sidebar(theme: &Theme) -> container::Style {
+    let colors = Colors::of(theme);
+    let background = shade(colors.surface, theme, 0.05);
+
+    container::Style {
+        background: Some(Background::Color(background)),
+        text_color: Some(colors.text),
+        ..container::Style::default()
+    }
+}
+
+pub fn settings_card(theme: &Theme, radius: f32) -> container::Style {
+    let colors = Colors::of(theme);
+    let background = shade(colors.surface, theme, 0.08);
+
+    container::Style {
+        background: Some(Background::Color(background)),
+        border: Border {
+            color: colors.border,
+            width: 1.0,
+            radius: radius.into(),
+        },
+        text_color: Some(colors.text),
+        ..container::Style::default()
+    }
+}
+
+pub fn settings_input(theme: &Theme, status: text_input::Status, radius: f32) -> text_input::Style {
+    let mut style = text_input::default(theme, status);
+    style.border.radius = radius.into();
+    style
+}
+
+pub fn settings_pick_list(
+    theme: &Theme,
+    status: pick_list::Status,
+    radius: f32,
+) -> pick_list::Style {
+    let mut style = pick_list::default(theme, status);
+    style.border.radius = radius.into();
+    style
+}
+
+pub fn settings_tab(
+    theme: &Theme,
+    status: button::Status,
+    selected: bool,
+    radius: f32,
+) -> button::Style {
+    let colors = Colors::of(theme);
+
+    let background = if selected {
+        Some(Background::Color(colors.card_selected))
+    } else if status == button::Status::Hovered {
+        Some(Background::Color(colors.card_hover))
+    } else {
+        None
+    };
+
+    button::Style {
+        background,
+        text_color: colors.text,
+        border: Border {
+            radius: radius.into(),
+            ..Border::default()
+        },
+        shadow: Default::default(),
+        snap: true,
+    }
+}
+
+pub fn settings_button(theme: &Theme, status: button::Status, radius: f32) -> button::Style {
+    let colors = Colors::of(theme);
+
+    let background = match status {
+        button::Status::Hovered => colors.card_hover,
+        button::Status::Pressed => colors.card_pressed,
+        _ => colors.surface,
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: colors.text,
+        border: Border {
+            color: colors.border,
+            width: 1.0,
+            radius: radius.into(),
+        },
+        shadow: Default::default(),
+        snap: true,
+    }
+}
+
+pub fn settings_primary_button(
+    theme: &Theme,
+    status: button::Status,
+    radius: f32,
+) -> button::Style {
+    let colors = Colors::of(theme);
+    let extended = theme.extended_palette();
+
+    let background = match status {
+        button::Status::Hovered => iced_palette::lighten(colors.accent, 0.08),
+        button::Status::Pressed => iced_palette::darken(colors.accent, 0.08),
+        _ => colors.accent,
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: extended.primary.base.text,
+        border: Border {
+            radius: radius.into(),
+            ..Border::default()
+        },
+        shadow: Default::default(),
+        snap: true,
+    }
+}
+
+fn shade(color: Color, theme: &Theme, amount: f32) -> Color {
+    if theme.extended_palette().is_dark {
+        iced_palette::lighten(color, amount)
+    } else {
+        iced_palette::darken(color, amount)
     }
 }

@@ -310,8 +310,13 @@ pub fn app_init() -> anyhow::Result<()> {
 pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
     iced::window::settings::PlatformSpecific {
         title_hidden: true,
-        ..Default::default()
+        titlebar_transparent: true,
+        fullsize_content_view: true,
     }
+}
+
+pub fn titlebar_inset() -> f32 {
+    28.0
 }
 
 pub fn drag_source() -> Option<DragSource> {

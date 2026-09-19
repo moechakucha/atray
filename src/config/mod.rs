@@ -135,6 +135,14 @@ impl FilterRule {
 pub struct Pattern(Regex);
 
 impl Pattern {
+    pub fn parse(pattern: &str) -> Result<Self, regex::Error> {
+        Regex::new(pattern).map(Pattern)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     fn matches(&self, value: Option<&str>) -> bool {
         value.is_some_and(|value| self.0.is_match(value))
     }
@@ -155,9 +163,7 @@ impl Serialize for Pattern {
 impl<'de> Deserialize<'de> for Pattern {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let pattern = String::deserialize(deserializer)?;
-        Regex::new(&pattern)
-            .map(Pattern)
-            .map_err(serde::de::Error::custom)
+        Pattern::parse(&pattern).map_err(serde::de::Error::custom)
     }
 }
 
@@ -265,3 +271,5 @@ impl Side {
         matches!(self, Self::Top | Self::Bottom)
     }
 }
+
+pub mod screen;

@@ -47,6 +47,11 @@ pub fn drag_source() -> Option<DragSource> {
     None
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn titlebar_inset() -> f32 {
+    0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIcon {
     pub width: u32,

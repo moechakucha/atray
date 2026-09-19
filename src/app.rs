@@ -18,7 +18,7 @@ use iced::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS};
+use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS, screen};
 use crate::input::{self, InputEvent};
 use crate::platform::DragHandler;
 use crate::theme;
@@ -297,6 +297,9 @@ pub enum Message {
     TrayExited,
     TooltipTick,
     SlideTick(Instant),
+    Screen(screen::Message),
+    WindowCloseRequested(window::Id),
+    WindowClosed(window::Id),
 }
 
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
@@ -348,6 +351,8 @@ pub struct App {
     scroll_offset: f32,
     tooltip_hover: Option<TooltipHover>,
     tooltip_window: Option<window::Id>,
+    config_window: Option<window::Id>,
+    screen: Option<screen::Screen>,
 }
 
 impl App {
@@ -376,6 +381,8 @@ impl App {
             scroll_offset: 0.0,
             tooltip_hover: None,
             tooltip_window: None,
+            config_window: None,
+            screen: None,
         };
 
         let task = if app.file_relay.is_empty() {
@@ -389,6 +396,14 @@ impl App {
 
     pub fn theme(&self, _id: window::Id) -> Option<Theme> {
         self.theme.clone()
+    }
+
+    pub fn title(&self, id: window::Id) -> String {
+        if self.config_window == Some(id) {
+            "atray Settings".to_owned()
+        } else {
+            String::new()
+        }
     }
 
     fn refresh_theme(&mut self) {
@@ -674,12 +689,98 @@ impl App {
         }
     }
 
+    fn open_config(&mut self) -> Task<Message> {
+        if self.config_window.is_some() {
+            return Task::none();
+        }
+
+        self.screen = Some(screen::Screen::from_config(&self.config));
+
+        let (id, task) = window::open(screen::window_settings());
+        self.config_window = Some(id);
+
+        task.discard()
+    }
+
+    fn save_config(&mut self) -> Task<Message> {
+        let Some(screen) = &self.screen else {
+            return Task::none();
+        };
+
+        let mut config = self.config.clone();
+
+        if let Err(error) = screen.apply(&mut config) {
+            if let Some(screen) = &mut self.screen {
+                screen.set_error(error);
+            }
+
+            return Task::none();
+        }
+
+        if let Err(error) = config.save_to_original() {
+            if let Some(screen) = &mut self.screen {
+                screen.set_error(format!("failed to save config: {error}"));
+            }
+
+            return Task::none();
+        }
+
+        let previous_side = self.config.appearance.side;
+        self.config = config;
+        self.refresh_theme();
+
+        if let Some(screen) = &mut self.screen {
+            screen.clear_error();
+        }
+
+        if self.config.appearance.side == previous_side {
+            Task::none()
+        } else {
+            self.restart_tray()
+        }
+    }
+
+    fn screen_message(&mut self, message: screen::Message) -> Task<Message> {
+        match message {
+            screen::Message::Save => return self.save_config(),
+            screen::Message::Revert => {
+                let restored = screen::Screen::from_config(&self.config);
+                self.screen = Some(restored);
+
+                Task::none()
+            }
+            message => {
+                if let Some(screen) = &mut self.screen {
+                    screen.update(message);
+                }
+
+                Task::none()
+            }
+        }
+    }
+
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
+        if self.config_window == Some(id) {
+            return self.screen_view();
+        }
+
         if self.tooltip_window == Some(id) {
             return self.tooltip_view();
         }
 
         self.relay_view()
+    }
+
+    fn screen_view(&self) -> Element<'_, Message> {
+        let theme = self.theme.clone().unwrap_or(Theme::Light);
+        let colors = theme::Colors::of(&theme);
+
+        match &self.screen {
+            Some(screen) => screen
+                .view(colors, self.metrics.card_radius)
+                .map(Message::Screen),
+            None => container(text("")).into(),
+        }
     }
 
     fn tooltip_view(&self) -> Element<'_, Message> {
@@ -881,6 +982,7 @@ impl App {
                             self.restart_tray()
                         }
                     }
+                    "settings" => self.open_config(),
                     _ => Task::none(),
                 };
             }
@@ -963,6 +1065,22 @@ impl App {
                 self.tray_hovered = false;
                 self.sync_tray()
             }
+            Message::Screen(message) => return self.screen_message(message),
+            Message::WindowCloseRequested(id) => {
+                if self.config_window == Some(id) {
+                    return window::close(id);
+                }
+
+                Task::none()
+            }
+            Message::WindowClosed(id) => {
+                if self.config_window == Some(id) {
+                    self.config_window = None;
+                    self.screen = None;
+                }
+
+                Task::none()
+            }
             Message::RelayScrolled(offset) => {
                 self.scroll_offset = offset;
                 Task::none()
@@ -1024,6 +1142,7 @@ impl App {
             self.listen_for_drag_completion(),
             self.listen_to_tray_menu(),
             self.listen_to_window_opens(),
+            self.listen_to_window_events(),
             self.listen_for_tooltip(),
             self.listen_to_slide(),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
@@ -1033,6 +1152,14 @@ impl App {
 
     fn listen_to_window_opens(&self) -> iced::Subscription<Message> {
         window::open_events().map(Message::RelayOpened)
+    }
+
+    fn listen_to_window_events(&self) -> iced::Subscription<Message> {
+        window::events().filter_map(|(id, event)| match event {
+            window::Event::CloseRequested => Some(Message::WindowCloseRequested(id)),
+            window::Event::Closed => Some(Message::WindowClosed(id)),
+            _ => None,
+        })
     }
 
     fn listen_for_tooltip(&self) -> iced::Subscription<Message> {

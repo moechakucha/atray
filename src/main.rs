@@ -24,6 +24,7 @@ fn load_icon(bytes: &[u8]) -> anyhow::Result<Icon> {
 
 fn construct_menu(version: &str) -> anyhow::Result<Menu> {
     let version_label = MenuItem::new(format!("Version {version}"), false, None);
+    let settings_button = MenuItem::with_id("settings", "Settings...", true, None);
     let config_file_button = MenuItem::with_id("config_file", "Open Config File", true, None);
     let reload_config_file_button =
         MenuItem::with_id("reload_config_file", "Reload Config File", true, None);
@@ -31,6 +32,8 @@ fn construct_menu(version: &str) -> anyhow::Result<Menu> {
 
     Ok(Menu::with_items(&[
         &version_label,
+        &PredefinedMenuItem::separator(),
+        &settings_button,
         &PredefinedMenuItem::separator(),
         &config_file_button,
         &reload_config_file_button,
@@ -69,6 +72,7 @@ fn main() -> anyhow::Result<()> {
 
     let daemon = iced::daemon(move || App::new(config.clone()), App::update, App::view)
         .theme(App::theme)
+        .title(App::title)
         .style(|_, theme| iced::theme::Style {
             background_color: Color::TRANSPARENT,
             ..iced::theme::Base::base(theme)
