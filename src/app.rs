@@ -7,9 +7,8 @@ use std::{
 
 use iced::widget::{column, container, scrollable};
 use iced::{Element, Length, Task, Theme, window};
-use rdev::Key;
 
-use crate::platform::DragHandler;
+use crate::platform::{DragHandler, InputEvent, Modifier};
 use crate::theme;
 use crate::widget::FileChip;
 
@@ -106,8 +105,6 @@ pub enum Message {
     FileDropped(PathBuf),
     FileSelectionToggled(usize),
     FileTakenOut(usize),
-    KeyPressed(Key),
-    KeyReleased(Key),
     PollDragResult,
     TrayMenuClicked(String),
     SystemThemeChanged,
@@ -147,7 +144,6 @@ struct Slide {
 pub struct App {
     file_relay: Vec<DeferredFile>,
     window_id: Option<window::Id>,
-    pressed_keys: HashSet<Key>,
     drag_handler: Box<dyn DragHandler>,
     dragging: Option<Vec<usize>>,
     lingering: Vec<DeferredFile>,
@@ -170,7 +166,6 @@ impl App {
             Self {
                 file_relay: Vec::new(),
                 window_id: None,
-                pressed_keys: HashSet::new(),
                 drag_handler: crate::platform::get_drag_handler(),
                 dragging: None,
                 lingering: Vec::new(),
@@ -359,14 +354,6 @@ impl App {
 
                 Task::none()
             }
-            Message::KeyPressed(key) => {
-                self.pressed_keys.insert(key);
-                Task::none()
-            }
-            Message::KeyReleased(key) => {
-                self.pressed_keys.remove(&key);
-                Task::none()
-            }
             Message::PollDragResult => Task::none(),
             Message::FileHovered => {
                 self.hovered = true;
@@ -396,8 +383,7 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = self.pressed_keys.contains(&Key::Alt)
-                    || self.pressed_keys.contains(&Key::AltGr);
+                let should_move = crate::platform::modifiers().contains(Modifier::Alt);
 
                 if let Err(err) = self.add_from_location(path.clone(), None, should_move) {
                     eprintln!("failed to add {path:?}: {err}");
@@ -471,7 +457,7 @@ impl App {
     pub fn subscription(&self) -> iced::Subscription<Message> {
         iced::Subscription::batch(vec![
             self.listen_to_drag(),
-            self.listen_to_rdev(),
+            self.listen_to_input(),
             self.listen_for_drag_state(),
             self.listen_for_drag_completion(),
             self.listen_to_tray_menu(),
@@ -541,43 +527,23 @@ impl App {
         })
     }
 
-    fn listen_to_rdev(&self) -> iced::Subscription<Message> {
-        use iced::futures::channel::{mpsc, oneshot};
-        use rdev::{Button, EventType};
+    fn listen_to_input(&self) -> iced::Subscription<Message> {
+        use iced::futures::channel::mpsc;
 
         iced::Subscription::run(|| {
-            iced::stream::channel(100, move |mut output: mpsc::Sender<Message>| async move {
-                let (exit_tx, exit_rx) = oneshot::channel();
-                std::thread::spawn(move || {
-                    #[cfg(target_os = "macos")]
-                    rdev::set_is_main_thread(false);
+            iced::stream::channel(100, move |output: mpsc::Sender<Message>| async move {
+                let output = std::sync::Mutex::new(output);
 
-                    if let Err(err) = rdev::listen(move |event| match event.event_type {
-                        EventType::KeyPress(key) => {
-                            output.try_send(Message::KeyPressed(key)).ok();
-                        }
-                        EventType::KeyRelease(key) => {
-                            output.try_send(Message::KeyReleased(key)).ok();
-                        }
-                        EventType::ButtonPress(btn) => {
-                            if matches!(btn, Button::Left) {
-                                output.try_send(Message::PointerPressed).ok();
-                            }
-                        }
-                        EventType::ButtonRelease(btn) => {
-                            if matches!(btn, Button::Left) {
-                                output.try_send(Message::PointerReleased).ok();
-                            }
-                        }
-                        _ => {}
-                    }) {
-                        eprintln!("Error when listening rdev events: {:?}", err);
-                    }
+                crate::platform::listen_input(Box::new(move |event| {
+                    let message = match event {
+                        InputEvent::PointerPressed => Message::PointerPressed,
+                        InputEvent::PointerReleased => Message::PointerReleased,
+                    };
 
-                    let _ = exit_tx.send(());
-                });
+                    output.lock().unwrap().try_send(message).ok();
+                }));
 
-                let _ = exit_rx.await;
+                std::future::pending::<()>().await;
             })
         })
     }

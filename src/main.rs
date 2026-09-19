@@ -22,6 +22,7 @@ fn load_icon(bytes: &[u8]) -> anyhow::Result<Icon> {
 
 fn main() -> anyhow::Result<()> {
     platform::app_init()?;
+    platform::init_input();
 
     let version = env!("CARGO_PKG_VERSION");
     let icon_bytes = include_bytes!("../assets/icon.png");

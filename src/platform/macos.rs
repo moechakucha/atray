@@ -18,9 +18,12 @@ use objc2_app_kit::{
     NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSPasteboard,
     NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
 };
+use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL};
 
-use crate::platform::DragHandler;
+use crate::platform::{
+    DragHandler, InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch,
+};
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
 
@@ -297,5 +300,54 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
     iced::window::settings::PlatformSpecific {
         title_hidden: true,
         ..Default::default()
+    }
+}
+
+pub struct MacosInputHandler {
+    sink: Arc<Mutex<Option<InputSink>>>,
+}
+
+impl MacosInputHandler {
+    pub fn init() -> Self {
+        let sink: Arc<Mutex<Option<InputSink>>> = Arc::new(Mutex::new(None));
+
+        let sink_for_down = Arc::clone(&sink);
+        let down_monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+            NSEventMask::LeftMouseDown,
+            &RcBlock::new(move |_event: NonNull<NSEvent>| {
+                dispatch(&sink_for_down, InputEvent::PointerPressed);
+            }),
+        );
+
+        let sink_for_up = Arc::clone(&sink);
+        let up_monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+            NSEventMask::LeftMouseUp,
+            &RcBlock::new(move |_event: NonNull<NSEvent>| {
+                dispatch(&sink_for_up, InputEvent::PointerReleased);
+            }),
+        );
+
+        std::mem::forget(down_monitor);
+        std::mem::forget(up_monitor);
+
+        Self { sink }
+    }
+}
+
+impl InputHandler for MacosInputHandler {
+    fn modifiers(&self) -> Modifiers {
+        let flags = CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState);
+        let mut modifiers = Modifiers::default();
+
+        modifiers.set(Modifier::Alt, flags.contains(CGEventFlags::MaskAlternate));
+        modifiers.set(Modifier::Control, flags.contains(CGEventFlags::MaskControl));
+        modifiers.set(Modifier::Shift, flags.contains(CGEventFlags::MaskShift));
+        modifiers.set(Modifier::Super, flags.contains(CGEventFlags::MaskCommand));
+
+        modifiers
+    }
+
+    fn listen(&self, sink: InputSink) {
+        *self.sink.lock().unwrap() = Some(sink);
     }
 }
