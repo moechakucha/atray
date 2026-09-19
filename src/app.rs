@@ -7,7 +7,7 @@ use std::{
 
 use iced::advanced::image;
 use iced::advanced::text::Wrapping;
-use iced::widget::{column, container, scrollable, text};
+use iced::widget::{column, container, mouse_area, scrollable, text};
 use iced::{Alignment, Element, Length, Task, Theme, window};
 
 use crate::platform::{DragHandler, InputEvent, Modifier};
@@ -103,6 +103,7 @@ impl DeferredFile {
     }
 }
 
+#[derive(Clone)]
 pub enum Message {
     PointerPressed,
     PointerReleased,
@@ -124,6 +125,8 @@ pub enum Message {
         truncated: bool,
     },
     ChipHoverLeft(usize),
+    TrayEntered,
+    TrayExited,
     TooltipTick,
     SlideTick(Instant),
 }
@@ -131,6 +134,10 @@ pub enum Message {
 const WINDOW_WIDTH: f32 = 150.0;
 const WINDOW_HEIGHT: f32 = 430.0;
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
+const TRAY_HIDDEN_X: f32 = -WINDOW_WIDTH;
+const TRAY_PEEK_WIDTH: f32 = 16.0;
+const TRAY_PEEK_X: f32 = TRAY_PEEK_WIDTH - WINDOW_WIDTH;
+const TRAY_OPEN_X: f32 = 0.0;
 const TOOLTIP_WIDTH: f32 = 320.0;
 const TOOLTIP_HEIGHT: f32 = 240.0;
 const TOOLTIP_GAP: f32 = 4.0;
@@ -157,7 +164,8 @@ static WINDOW_SETTINGS: LazyLock<window::Settings> = LazyLock::new(|| window::Se
 #[derive(Clone, Copy)]
 struct Slide {
     started: Instant,
-    opening: bool,
+    from: f32,
+    to: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -179,6 +187,8 @@ pub struct App {
     metrics: theme::Metrics,
     slide: Option<Slide>,
     resting_y: Option<f32>,
+    window_x: f32,
+    tray_hovered: bool,
     scroll_offset: f32,
     tooltip_hover: Option<TooltipHover>,
     tooltip_window: Option<window::Id>,
@@ -204,6 +214,8 @@ impl App {
                 metrics,
                 slide: None,
                 resting_y: None,
+                window_x: TRAY_HIDDEN_X,
+                tray_hovered: false,
                 scroll_offset: 0.0,
                 tooltip_hover: None,
                 tooltip_window: None,
@@ -285,41 +297,37 @@ impl App {
 
         let (id, task) = window::open(WINDOW_SETTINGS.clone());
         self.window_id = Some(id);
+        self.window_x = TRAY_HIDDEN_X;
         self.scroll_offset = 0.0;
 
         task.discard()
     }
 
-    fn slide_out(&mut self) -> Task<Message> {
-        if self.slide.is_some_and(|slide| !slide.opening) {
-            return Task::none();
+    fn tray_target(&self) -> f32 {
+        if self.dragging.is_some() || self.drag_handler.is_dragging() || self.tray_hovered {
+            TRAY_OPEN_X
+        } else if self.file_relay.is_empty() {
+            TRAY_HIDDEN_X
+        } else {
+            TRAY_PEEK_X
         }
-
-        let Some(id) = self.window_id else {
-            return Task::none();
-        };
-
-        if self.resting_y.is_none() {
-            self.window_id = None;
-            return window::close(id);
-        }
-
-        self.slide = Some(Slide {
-            started: Instant::now(),
-            opening: false,
-        });
-
-        Task::none()
     }
 
-    fn slide_in(&mut self) -> Task<Message> {
-        if !self.slide.is_some_and(|slide| !slide.opening) {
+    fn sync_tray(&mut self) -> Task<Message> {
+        if self.window_id.is_none() || self.resting_y.is_none() {
+            return Task::none();
+        }
+
+        let target = self.tray_target();
+
+        if self.slide.is_some_and(|slide| slide.to == target) {
             return Task::none();
         }
 
         self.slide = Some(Slide {
             started: Instant::now(),
-            opening: true,
+            from: self.window_x,
+            to: target,
         });
 
         Task::none()
@@ -414,20 +422,24 @@ impl App {
             })
             .collect();
 
-        container(
-            scrollable(
-                column(files)
-                    .spacing(theme::SPACING)
-                    .align_x(Alignment::Center)
-                    .width(Length::Fill),
+        mouse_area(
+            container(
+                scrollable(
+                    column(files)
+                        .spacing(theme::SPACING)
+                        .align_x(Alignment::Center)
+                        .width(Length::Fill),
+                )
+                .height(Length::Fill)
+                .on_scroll(|viewport| Message::RelayScrolled(viewport.absolute_offset().y)),
             )
-            .height(Length::Fill)
-            .on_scroll(|viewport| Message::RelayScrolled(viewport.absolute_offset().y)),
+            .style(theme::surface)
+            .padding(theme::VIEW_PADDING)
+            .width(Length::Fill)
+            .height(Length::Fill),
         )
-        .style(theme::surface)
-        .padding(theme::VIEW_PADDING)
-        .width(Length::Fill)
-        .height(Length::Fill)
+        .on_enter(Message::TrayEntered)
+        .on_exit(Message::TrayExited)
         .into()
     }
 
@@ -458,15 +470,7 @@ impl App {
                     return self.try_open_relay();
                 }
 
-                let idle = self.dragging.is_none()
-                    && self.file_relay.is_empty()
-                    && !self.drag_handler.is_dragging();
-
-                if idle {
-                    self.slide_out()
-                } else {
-                    self.slide_in()
-                }
+                self.sync_tray()
             }
             Message::FileTakenOut(idx) => {
                 self.take_out(idx);
@@ -548,12 +552,18 @@ impl App {
                 }
             }
             Message::RelayPositioned(position) => {
-                if let Some(position) = position {
+                let Some(position) = position else {
+                    if let Some(id) = self.window_id.take() {
+                        return window::close(id);
+                    }
+
+                    return Task::none();
+                };
+
+                if self.window_id.is_some() {
+                    self.window_x = position.x;
                     self.resting_y = Some(position.y);
-                    self.slide = Some(Slide {
-                        started: Instant::now(),
-                        opening: true,
-                    });
+                    return self.sync_tray();
                 }
 
                 Task::none()
@@ -571,23 +581,33 @@ impl App {
                 let elapsed = now.saturating_duration_since(slide.started).as_secs_f32();
                 let progress = (elapsed / SLIDE_DURATION.as_secs_f32()).clamp(0.0, 1.0);
                 let eased = ease_out_cubic(progress);
-                let travel = if slide.opening { 1.0 - eased } else { eased };
+                let x = slide.from + (slide.to - slide.from) * eased;
+
+                self.window_x = x;
 
                 if progress < 1.0 {
-                    return window::move_to(id, iced::Point::new(-WINDOW_WIDTH * travel, y));
+                    return window::move_to(id, iced::Point::new(x, y));
                 }
 
                 self.slide = None;
 
-                if slide.opening {
-                    window::move_to(id, iced::Point::new(0.0, y))
-                } else {
+                if slide.to == TRAY_HIDDEN_X {
                     self.window_id = None;
                     self.tooltip_hover = None;
                     let tooltip = self.close_tooltip();
 
-                    Task::batch([tooltip, window::close(id)])
+                    return Task::batch([tooltip, window::close(id)]);
                 }
+
+                window::move_to(id, iced::Point::new(slide.to, y))
+            }
+            Message::TrayEntered => {
+                self.tray_hovered = true;
+                self.sync_tray()
+            }
+            Message::TrayExited => {
+                self.tray_hovered = false;
+                self.sync_tray()
             }
             Message::RelayScrolled(offset) => {
                 self.scroll_offset = offset;
