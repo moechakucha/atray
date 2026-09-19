@@ -472,6 +472,33 @@ impl App {
         }
     }
 
+    fn restart_tray(&mut self) -> Task<Message> {
+        let tooltip = self.close_tooltip();
+        self.tooltip_hover = None;
+
+        let close = match self.window_id.take() {
+            Some(id) => window::close(id),
+            None => Task::none(),
+        };
+
+        self.anchor = None;
+        self.position = Point::ORIGIN;
+        self.slide = None;
+        self.scroll_offset = 0.0;
+        self.tray_hovered = false;
+
+        let open = if self.dragging.is_some()
+            || self.drag_handler.is_dragging()
+            || !self.file_relay.is_empty()
+        {
+            self.open_tray()
+        } else {
+            Task::none()
+        };
+
+        Task::batch([tooltip, close, open])
+    }
+
     fn try_open_relay(&mut self) -> Task<Message> {
         if !self.drag_handler.is_dragging() {
             return Task::none();
@@ -817,8 +844,14 @@ impl App {
                         Task::none()
                     }
                     "reload_config_file" => {
-                        self.config = config::Config::load(&self.config.path()).unwrap_or_default();
-                        Task::none()
+                        let previous = self.config.window.clone();
+                        self.config = config::Config::load(self.config.path()).unwrap_or_default();
+
+                        if self.config.window == previous {
+                            Task::none()
+                        } else {
+                            self.restart_tray()
+                        }
                     }
                     _ => Task::none(),
                 };

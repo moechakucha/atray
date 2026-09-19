@@ -77,7 +77,7 @@ impl Default for Preferences {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowConfig {
     #[serde(default)]
     pub side: Side,
