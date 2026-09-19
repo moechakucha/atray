@@ -6,7 +6,6 @@ use native_theme_iced::ResolvedTheme;
 #[derive(Debug, Clone, Copy)]
 pub struct Colors {
     pub surface: Color,
-    pub card: Color,
     pub card_hover: Color,
     pub card_pressed: Color,
     pub card_selected: Color,
@@ -14,18 +13,16 @@ pub struct Colors {
     pub border_hover: Color,
     pub accent: Color,
     pub text: Color,
-    pub text_muted: Color,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
-    pub chip_height: f32,
+    pub chip_size: f32,
     pub card_radius: f32,
     pub card_padding: f32,
-    pub accent_width: f32,
-    pub accent_gap: f32,
+    pub icon_size: f32,
+    pub icon_gap: f32,
     pub name_size: f32,
-    pub detail_size: f32,
     pub line_height: f32,
 }
 
@@ -34,20 +31,23 @@ pub const VIEW_PADDING: f32 = 8.0;
 pub const WINDOW_RADIUS: f32 = 12.0;
 
 const SURFACE_ALPHA: f32 = 0.72;
-pub const CARD_PADDING: f32 = 10.0;
-pub const ACCENT_WIDTH: f32 = 3.0;
-pub const ACCENT_GAP: f32 = 6.0;
+pub const CARD_PADDING: f32 = 8.0;
+pub const ICON_SIZE: f32 = 64.0;
+const ICON_GAP: f32 = 4.0;
+
+fn chip_size(icon_size: f32, name_size: f32, line_height: f32) -> f32 {
+    (CARD_PADDING * 2.0 + icon_size + ICON_GAP + name_size * line_height).ceil()
+}
 
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            chip_height: 54.0,
+            chip_size: chip_size(ICON_SIZE, 12.5, 1.3),
             card_radius: 10.0,
             card_padding: CARD_PADDING,
-            accent_width: ACCENT_WIDTH,
-            accent_gap: ACCENT_GAP,
+            icon_size: ICON_SIZE,
+            icon_gap: ICON_GAP,
             name_size: 12.5,
-            detail_size: 10.0,
             line_height: 1.3,
         }
     }
@@ -57,17 +57,14 @@ impl Metrics {
     pub fn of(resolved: &ResolvedTheme) -> Self {
         let name_size = native_theme_iced::font_size(resolved).clamp(10.0, 20.0);
         let line_height = native_theme_iced::line_height_multiplier(resolved).max(1.0);
-        let detail_size = (name_size * 0.8).max(9.0);
-        let line_span = (name_size + detail_size) * line_height;
 
         Self {
-            chip_height: (line_span + CARD_PADDING * 2.0).ceil(),
+            chip_size: chip_size(ICON_SIZE, name_size, line_height),
             card_radius: native_theme_iced::border_radius(resolved).clamp(4.0, 16.0),
             card_padding: CARD_PADDING,
-            accent_width: ACCENT_WIDTH,
-            accent_gap: ACCENT_GAP,
+            icon_size: ICON_SIZE,
+            icon_gap: ICON_GAP,
             name_size,
-            detail_size,
             line_height,
         }
     }
@@ -88,10 +85,9 @@ impl Colors {
             }
         };
 
-        let (surface, card, card_hover, card_pressed, border, border_hover) = if dark {
+        let (surface, card_hover, card_pressed, border, border_hover) = if dark {
             (
                 background,
-                shade(0.05),
                 shade(0.10),
                 shade(0.15),
                 shade(0.12),
@@ -100,7 +96,6 @@ impl Colors {
         } else {
             (
                 shade(0.06),
-                background,
                 shade(0.04),
                 shade(0.09),
                 shade(0.11),
@@ -110,7 +105,6 @@ impl Colors {
 
         Self {
             surface,
-            card,
             card_hover,
             card_pressed,
             card_selected: extended.primary.weak.color.scale_alpha(SURFACE_ALPHA),
@@ -118,7 +112,6 @@ impl Colors {
             border_hover,
             accent: base.primary,
             text: base.text,
-            text_muted: iced_palette::mix(base.text, base.background, 0.4),
         }
     }
 }
@@ -143,29 +136,17 @@ pub fn surface(theme: &Theme) -> container::Style {
     }
 }
 
-pub fn accent(theme: &Theme, seed: &str) -> Color {
-    let base = theme.palette();
-    let extended = theme.extended_palette();
+pub fn tooltip(theme: &Theme) -> container::Style {
+    let colors = Colors::of(theme);
 
-    let accents = [
-        base.primary,
-        base.success,
-        base.warning,
-        base.danger,
-        extended.secondary.strong.color,
-        extended.primary.strong.color,
-    ];
-
-    accents[(hash(seed) % accents.len() as u64) as usize]
-}
-
-fn hash(seed: &str) -> u64 {
-    let mut hash: u64 = 1469598103934665603;
-
-    for byte in seed.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(1099511628211);
+    container::Style {
+        background: Some(Background::Color(theme.palette().background)),
+        border: Border {
+            color: colors.border_hover,
+            width: 1.0,
+            radius: WINDOW_RADIUS.into(),
+        },
+        text_color: Some(colors.text),
+        ..container::Style::default()
     }
-
-    hash
 }

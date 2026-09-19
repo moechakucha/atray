@@ -1,11 +1,12 @@
+use iced::advanced::image::{self, Renderer as ImageRenderer};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
-use iced::advanced::text::{self, Text};
+use iced::advanced::text::{self, Paragraph, Text};
 use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::{
-    Background, Border, Element, Event, Length, Pixels, Point, Rectangle, Shadow, Size, Theme,
-    alignment::Vertical,
+    Background, Border, Element, Event, Length, Pixels, Point, Radians, Rectangle, Shadow, Size,
+    Theme, alignment::Vertical,
 };
 
 use crate::app::{DeferredFile, Message};
@@ -31,16 +32,19 @@ impl<'a> FileChip<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct State {
     is_pressed: bool,
     press_origin: Option<Point>,
     dragging: bool,
+    hovered: bool,
+    truncated: bool,
+    label: String,
 }
 
 impl<Renderer> Widget<Message, Theme, Renderer> for FileChip<'_>
 where
-    Renderer: text::Renderer,
+    Renderer: text::Renderer + ImageRenderer<Handle = image::Handle>,
 {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<State>()
@@ -52,22 +56,37 @@ where
 
     fn size(&self) -> Size<Length> {
         Size {
-            width: Length::Fill,
-            height: Length::Fixed(self.metrics.chip_height),
+            width: Length::Fixed(self.metrics.chip_size),
+            height: Length::Fixed(self.metrics.chip_size),
         }
     }
 
     fn layout(
         &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
+        tree: &mut Tree,
+        renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(limits.resolve(
-            Length::Fill,
-            Length::Fixed(self.metrics.chip_height),
-            Size::ZERO,
-        ))
+        let available = limits.max();
+        let size = self
+            .metrics
+            .chip_size
+            .min(available.width)
+            .min(available.height);
+        let label_width = (size - self.metrics.card_padding * 2.0).max(0.0);
+
+        let label = truncate::<Renderer>(
+            &self.file.file_name,
+            label_width,
+            &self.metrics,
+            renderer.default_font(),
+        );
+
+        let state = tree.state.downcast_mut::<State>();
+        state.truncated = label != self.file.file_name;
+        state.label = label;
+
+        layout::Node::new(Size::new(size, size))
     }
 
     fn update(
@@ -83,6 +102,24 @@ where
     ) {
         let bounds = layout.bounds();
         let state = tree.state.downcast_mut::<State>();
+
+        if matches!(event, Event::Mouse(_)) {
+            let hovered = cursor.is_over(bounds);
+
+            if hovered != state.hovered {
+                state.hovered = hovered;
+
+                shell.publish(if hovered {
+                    Message::ChipHovered {
+                        index: self.index,
+                        y: bounds.y,
+                        truncated: state.truncated,
+                    }
+                } else {
+                    Message::ChipHoverLeft(self.index)
+                });
+            }
+        }
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -166,96 +203,81 @@ where
         let metrics = self.metrics;
 
         let background = if state.is_pressed {
-            palette.card_pressed
+            Some(palette.card_pressed)
         } else if self.selected {
-            palette.card_selected
+            Some(palette.card_selected)
         } else if hovered {
-            palette.card_hover
+            Some(palette.card_hover)
         } else {
-            palette.card
+            None
         };
 
-        let border_color = if self.selected {
-            palette.accent
-        } else if hovered {
-            palette.border_hover
-        } else {
-            palette.border
-        };
+        if let Some(background) = background {
+            let border_color = if self.selected {
+                palette.accent
+            } else if hovered {
+                palette.border_hover
+            } else {
+                palette.border
+            };
 
-        renderer.fill_quad(
-            Quad {
+            renderer.fill_quad(
+                Quad {
+                    bounds,
+                    border: Border {
+                        color: border_color,
+                        width: 1.0,
+                        radius: metrics.card_radius.into(),
+                    },
+                    shadow: Shadow::default(),
+                    snap: true,
+                },
+                Background::Color(background),
+            );
+        }
+
+        if let Some(handle) = &self.file.icon {
+            renderer.draw_image(
+                image::Image {
+                    handle: handle.clone(),
+                    filter_method: image::FilterMethod::Linear,
+                    rotation: Radians(0.0),
+                    border_radius: Default::default(),
+                    opacity: 1.0,
+                    snap: true,
+                },
+                Rectangle {
+                    x: bounds.x + (bounds.width - metrics.icon_size) / 2.0,
+                    y: bounds.y + metrics.card_padding,
+                    width: metrics.icon_size,
+                    height: metrics.icon_size,
+                },
                 bounds,
-                border: Border {
-                    color: border_color,
-                    width: 1.0,
-                    radius: metrics.card_radius.into(),
-                },
-                shadow: Shadow::default(),
-                snap: true,
-            },
-            Background::Color(background),
-        );
+            );
+        }
 
-        let accent = Rectangle {
-            x: bounds.x + metrics.card_padding,
-            y: bounds.y + metrics.card_padding,
-            width: metrics.accent_width,
-            height: (bounds.height - metrics.card_padding * 2.0).max(0.0),
-        };
-
-        renderer.fill_quad(
-            Quad {
-                bounds: accent,
-                border: Border {
-                    radius: (metrics.accent_width / 2.0).into(),
-                    ..Border::default()
-                },
-                shadow: Shadow::default(),
-                snap: true,
-            },
-            Background::Color(theme::accent(theme, &extension(&self.file.file_name))),
-        );
-
-        let text_x = bounds.x + metrics.card_padding + metrics.accent_width + metrics.accent_gap;
-        let text_width = (bounds.x + bounds.width - metrics.card_padding - text_x).max(0.0);
+        let line_height = metrics.name_size * metrics.line_height;
 
         renderer.fill_text(
             Text {
-                content: self.file.file_name.clone(),
-                bounds: Size::new(text_width, metrics.name_size * metrics.line_height),
+                content: state.label.clone(),
+                bounds: Size::new(
+                    (bounds.width - metrics.card_padding * 2.0).max(0.0),
+                    line_height,
+                ),
                 size: Pixels(metrics.name_size),
                 line_height: text::LineHeight::Relative(metrics.line_height),
                 font: renderer.default_font(),
-                align_x: text::Alignment::Left,
-                align_y: Vertical::Top,
-                shaping: text::Shaping::default(),
-                wrapping: text::Wrapping::None,
-            },
-            Point::new(text_x, bounds.y + metrics.card_padding),
-            palette.text,
-            bounds,
-        );
-
-        renderer.fill_text(
-            Text {
-                content: detail(&self.file.file_name, self.file.file_size),
-                bounds: Size::new(text_width, metrics.detail_size * metrics.line_height),
-                size: Pixels(metrics.detail_size),
-                line_height: text::LineHeight::Relative(metrics.line_height),
-                font: renderer.default_font(),
-                align_x: text::Alignment::Left,
+                align_x: text::Alignment::Center,
                 align_y: Vertical::Top,
                 shaping: text::Shaping::default(),
                 wrapping: text::Wrapping::None,
             },
             Point::new(
-                text_x,
-                bounds.y + bounds.height
-                    - metrics.card_padding
-                    - metrics.detail_size * metrics.line_height,
+                bounds.center().x,
+                bounds.y + metrics.card_padding + metrics.icon_size + metrics.icon_gap,
             ),
-            palette.text_muted,
+            palette.text,
             bounds,
         );
     }
@@ -267,37 +289,53 @@ impl<'a> From<FileChip<'a>> for Element<'a, Message> {
     }
 }
 
-fn extension(file_name: &str) -> String {
-    file_name
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.to_uppercase())
-        .unwrap_or_default()
-}
+fn truncate<Renderer>(
+    name: &str,
+    width: f32,
+    metrics: &Metrics,
+    font: <Renderer as text::Renderer>::Font,
+) -> String
+where
+    Renderer: text::Renderer,
+{
+    let measure = |content: &str| {
+        <Renderer::Paragraph as text::Paragraph>::with_text(Text {
+            content,
+            bounds: Size::new(f32::INFINITY, metrics.name_size * metrics.line_height),
+            size: Pixels(metrics.name_size),
+            line_height: text::LineHeight::Relative(metrics.line_height),
+            font,
+            align_x: text::Alignment::Left,
+            align_y: Vertical::Top,
+            shaping: text::Shaping::default(),
+            wrapping: text::Wrapping::None,
+        })
+        .min_bounds()
+        .width
+    };
 
-fn detail(file_name: &str, file_size: u64) -> String {
-    let extension = extension(file_name);
-
-    if extension.is_empty() {
-        format_size(file_size)
-    } else {
-        format!("{extension}  {}", format_size(file_size))
+    if measure(name) <= width {
+        return name.to_string();
     }
-}
 
-fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let ellipsis = '…';
+    let budget = (width - measure(&ellipsis.to_string())).max(0.0);
+    let characters: Vec<char> = name.chars().collect();
+    let mut low = 0;
+    let mut high = characters.len();
 
-    let mut value = bytes as f64;
-    let mut unit = 0;
+    while low < high {
+        let middle = (low + high + 1) / 2;
+        let candidate: String = characters[..middle].iter().collect();
 
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
+        if measure(&candidate) <= budget {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
     }
 
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    let mut truncated: String = characters[..low].iter().collect();
+    truncated.push(ellipsis);
+    truncated
 }

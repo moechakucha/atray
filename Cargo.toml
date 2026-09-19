@@ -16,7 +16,7 @@ deb_depends = ["libc6", "libx11-6", "libxkbcommon0", "libwayland-client0"]
 anyhow = "1"
 findfont = "0.2.0"
 font-kit = "0.14.3"
-iced = { version = "0.14", features = ["advanced"] }
+iced = { version = "0.14", features = ["advanced", "image"] }
 image = "0.25.10"
 native-theme-iced = "0.5.8"
 tempfile = "3"

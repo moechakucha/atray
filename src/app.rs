@@ -5,8 +5,10 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use iced::widget::{column, container, scrollable};
-use iced::{Element, Length, Task, Theme, window};
+use iced::advanced::image;
+use iced::advanced::text::Wrapping;
+use iced::widget::{column, container, scrollable, text};
+use iced::{Alignment, Element, Length, Task, Theme, window};
 
 use crate::platform::{DragHandler, InputEvent, Modifier};
 use crate::theme;
@@ -18,6 +20,7 @@ pub struct DeferredFile {
     pub file_name: String,
     pub file_size: u64,
     pub last_modified: SystemTime,
+    pub icon: Option<image::Handle>,
 }
 
 #[derive(Debug)]
@@ -56,6 +59,9 @@ impl DeferredFile {
 
         let original = path;
 
+        let icon = crate::platform::file_icon(&original, (theme::ICON_SIZE * 2.0).round() as u32)
+            .map(|icon| image::Handle::from_rgba(icon.width, icon.height, icon.rgba));
+
         let ownership = if should_move {
             match cache_path {
                 Some(cache_path) => {
@@ -85,6 +91,7 @@ impl DeferredFile {
             file_name,
             file_size: metadata.len(),
             last_modified: metadata.modified()?,
+            icon,
         })
     }
 
@@ -110,12 +117,24 @@ pub enum Message {
     SystemThemeChanged,
     RelayOpened(window::Id),
     RelayPositioned(Option<iced::Point>),
+    RelayScrolled(f32),
+    ChipHovered {
+        index: usize,
+        y: f32,
+        truncated: bool,
+    },
+    ChipHoverLeft(usize),
+    TooltipTick,
     SlideTick(Instant),
 }
 
 const WINDOW_WIDTH: f32 = 150.0;
 const WINDOW_HEIGHT: f32 = 430.0;
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
+const TOOLTIP_WIDTH: f32 = 320.0;
+const TOOLTIP_HEIGHT: f32 = 240.0;
+const TOOLTIP_GAP: f32 = 4.0;
+const TOOLTIP_DELAY: Duration = Duration::from_millis(350);
 
 static WINDOW_SETTINGS: LazyLock<window::Settings> = LazyLock::new(|| window::Settings {
     size: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
@@ -141,6 +160,13 @@ struct Slide {
     opening: bool,
 }
 
+#[derive(Clone, Copy)]
+struct TooltipHover {
+    index: usize,
+    y: f32,
+    since: Instant,
+}
+
 pub struct App {
     file_relay: Vec<DeferredFile>,
     window_id: Option<window::Id>,
@@ -153,6 +179,9 @@ pub struct App {
     metrics: theme::Metrics,
     slide: Option<Slide>,
     resting_y: Option<f32>,
+    scroll_offset: f32,
+    tooltip_hover: Option<TooltipHover>,
+    tooltip_window: Option<window::Id>,
 }
 
 impl App {
@@ -175,6 +204,9 @@ impl App {
                 metrics,
                 slide: None,
                 resting_y: None,
+                scroll_offset: 0.0,
+                tooltip_hover: None,
+                tooltip_window: None,
             },
             Task::none(),
         )
@@ -253,6 +285,7 @@ impl App {
 
         let (id, task) = window::open(WINDOW_SETTINGS.clone());
         self.window_id = Some(id);
+        self.scroll_offset = 0.0;
 
         task.discard()
     }
@@ -292,7 +325,86 @@ impl App {
         Task::none()
     }
 
-    pub fn view(&self, _id: window::Id) -> Element<'_, Message> {
+    fn tooltip_anchor(&self, y: f32) -> f32 {
+        let resting_y = self.resting_y.unwrap_or(0.0);
+        let top = resting_y + y - self.scroll_offset;
+
+        top.clamp(
+            resting_y,
+            resting_y + (WINDOW_HEIGHT - TOOLTIP_HEIGHT).max(0.0),
+        )
+    }
+
+    fn open_tooltip(&mut self, y: f32) -> Task<Message> {
+        let settings = window::Settings {
+            size: (TOOLTIP_WIDTH, TOOLTIP_HEIGHT).into(),
+            position: window::Position::Specific(iced::Point::new(
+                WINDOW_WIDTH + TOOLTIP_GAP,
+                self.tooltip_anchor(y),
+            )),
+            decorations: false,
+            closeable: false,
+            resizable: false,
+            transparent: true,
+            minimizable: false,
+            level: window::Level::AlwaysOnTop,
+            exit_on_close_request: false,
+            platform_specific: crate::platform::platform_window_settings(),
+            ..Default::default()
+        };
+
+        let (id, task) = window::open(settings);
+        self.tooltip_window = Some(id);
+
+        task.discard()
+    }
+
+    fn move_tooltip(&mut self, y: f32) -> Task<Message> {
+        let Some(id) = self.tooltip_window else {
+            return Task::none();
+        };
+
+        window::move_to(
+            id,
+            iced::Point::new(WINDOW_WIDTH + TOOLTIP_GAP, self.tooltip_anchor(y)),
+        )
+    }
+
+    fn close_tooltip(&mut self) -> Task<Message> {
+        match self.tooltip_window.take() {
+            Some(id) => window::close(id),
+            None => Task::none(),
+        }
+    }
+
+    pub fn view(&self, id: window::Id) -> Element<'_, Message> {
+        if self.tooltip_window == Some(id) {
+            return self.tooltip_view();
+        }
+
+        self.relay_view()
+    }
+
+    fn tooltip_view(&self) -> Element<'_, Message> {
+        let name = self
+            .tooltip_hover
+            .and_then(|hover| self.file_relay.get(hover.index))
+            .map(|file| file.file_name.as_str())
+            .unwrap_or_default();
+
+        container(
+            text(name)
+                .size(self.metrics.name_size)
+                .wrapping(Wrapping::WordOrGlyph),
+        )
+        .style(theme::tooltip)
+        .padding(theme::CARD_PADDING)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
+        .into()
+    }
+
+    fn relay_view(&self) -> Element<'_, Message> {
         let files: Vec<Element<Message>> = self
             .file_relay
             .iter()
@@ -302,12 +414,21 @@ impl App {
             })
             .collect();
 
-        container(scrollable(column(files).spacing(theme::SPACING)).height(Length::Fill))
-            .style(theme::surface)
-            .padding(theme::VIEW_PADDING)
-            .width(Length::Fill)
+        container(
+            scrollable(
+                column(files)
+                    .spacing(theme::SPACING)
+                    .align_x(Alignment::Center)
+                    .width(Length::Fill),
+            )
             .height(Length::Fill)
-            .into()
+            .on_scroll(|viewport| Message::RelayScrolled(viewport.absolute_offset().y)),
+        )
+        .style(theme::surface)
+        .padding(theme::VIEW_PADDING)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -322,7 +443,11 @@ impl App {
                     self.drag_handler.cancel_pending_drag();
                 }
 
-                self.try_open_relay()
+                self.tooltip_hover = None;
+                self.hovered = false;
+                let tooltip = self.close_tooltip();
+
+                Task::batch([tooltip, self.try_open_relay()])
             }
             Message::PointerReleased => {
                 self.drag_handler.cancel_pending_drag();
@@ -364,6 +489,12 @@ impl App {
                 Task::none()
             }
             Message::FileDropped(path) => {
+                self.hovered = false;
+
+                if let Some(hover) = &mut self.tooltip_hover {
+                    hover.since = Instant::now();
+                }
+
                 if let Some(index) = self.lingering.iter().position(|file| file.path() == &path) {
                     self.file_relay.push(self.lingering.remove(index));
                     return Task::none();
@@ -406,6 +537,10 @@ impl App {
                 Task::none()
             }
             Message::RelayOpened(id) => {
+                if self.tooltip_window == Some(id) {
+                    return window::enable_mouse_passthrough(id);
+                }
+
                 if self.window_id == Some(id) {
                     window::position(id).map(Message::RelayPositioned)
                 } else {
@@ -448,8 +583,55 @@ impl App {
                     window::move_to(id, iced::Point::new(0.0, y))
                 } else {
                     self.window_id = None;
-                    window::close(id)
+                    self.tooltip_hover = None;
+                    let tooltip = self.close_tooltip();
+
+                    Task::batch([tooltip, window::close(id)])
                 }
+            }
+            Message::RelayScrolled(offset) => {
+                self.scroll_offset = offset;
+                Task::none()
+            }
+            Message::ChipHovered {
+                index,
+                y,
+                truncated,
+            } => {
+                if !truncated {
+                    return Task::none();
+                }
+
+                self.tooltip_hover = Some(TooltipHover {
+                    index,
+                    y,
+                    since: Instant::now(),
+                });
+
+                self.move_tooltip(y)
+            }
+            Message::ChipHoverLeft(index) => {
+                if self.tooltip_hover.is_some_and(|hover| hover.index == index) {
+                    self.tooltip_hover = None;
+                    self.close_tooltip()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::TooltipTick => {
+                let Some(hover) = self.tooltip_hover else {
+                    return Task::none();
+                };
+
+                if self.tooltip_window.is_some()
+                    || self.hovered
+                    || self.dragging.is_some()
+                    || hover.since.elapsed() < TOOLTIP_DELAY
+                {
+                    return Task::none();
+                }
+
+                self.open_tooltip(hover.y)
             }
         }
     }
@@ -462,6 +644,7 @@ impl App {
             self.listen_for_drag_completion(),
             self.listen_to_tray_menu(),
             self.listen_to_window_opens(),
+            self.listen_for_tooltip(),
             self.listen_to_slide(),
             iced::system::theme_changes().map(|_| Message::SystemThemeChanged),
         ])
@@ -469,6 +652,14 @@ impl App {
 
     fn listen_to_window_opens(&self) -> iced::Subscription<Message> {
         window::open_events().map(Message::RelayOpened)
+    }
+
+    fn listen_for_tooltip(&self) -> iced::Subscription<Message> {
+        if self.tooltip_hover.is_none() || self.tooltip_window.is_some() {
+            return iced::Subscription::none();
+        }
+
+        iced::Subscription::run(tooltip_ticks)
     }
 
     fn listen_to_slide(&self) -> iced::Subscription<Message> {
@@ -563,6 +754,10 @@ fn drag_completion_ticks() -> impl iced::futures::Stream<Item = Message> {
 
 fn drag_state_ticks() -> impl iced::futures::Stream<Item = Message> {
     ticks(100, || Message::PollDragState)
+}
+
+fn tooltip_ticks() -> impl iced::futures::Stream<Item = Message> {
+    ticks(50, || Message::TooltipTick)
 }
 
 fn ticks(interval_ms: u64, message: fn() -> Message) -> impl iced::futures::Stream<Item = Message> {

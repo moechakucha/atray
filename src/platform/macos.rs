@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr::NonNull,
     sync::{
         Arc, Mutex,
@@ -22,7 +22,7 @@ use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL};
 
 use crate::platform::{
-    DragHandler, InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch,
+    DragHandler, FileIcon, InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch,
 };
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
@@ -301,6 +301,25 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
         title_hidden: true,
         ..Default::default()
     }
+}
+
+pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {
+    let size = size.max(1);
+    let workspace = NSWorkspace::sharedWorkspace();
+    let image = workspace.iconForFile(&NSString::from_str(&path.to_string_lossy()));
+    let representation = image.TIFFRepresentation()?;
+    let source =
+        image::load_from_memory_with_format(&representation.to_vec(), image::ImageFormat::Tiff)
+            .ok()?;
+    let icon = source
+        .resize_exact(size, size, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+
+    Some(FileIcon {
+        width: icon.width(),
+        height: icon.height(),
+        rgba: icon.into_raw(),
+    })
 }
 
 pub struct MacosInputHandler {

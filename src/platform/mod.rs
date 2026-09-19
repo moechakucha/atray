@@ -37,6 +37,18 @@ pub fn get_drag_handler() -> Box<dyn DragHandler> {
     todo!("implement a drag handler for this platform")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileIcon {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn file_icon(_path: &std::path::Path, _size: u32) -> Option<FileIcon> {
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Modifier {
     Alt,
