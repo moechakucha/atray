@@ -42,6 +42,51 @@ struct State {
     label: String,
 }
 
+struct Geometry {
+    padding: f32,
+    icon: f32,
+    gap: f32,
+    name: f32,
+    line_height_factor: f32,
+    radius: f32,
+}
+
+impl Geometry {
+    fn of(metrics: &Metrics, size: f32) -> Self {
+        let scale = (size / metrics.chip_size).clamp(0.0, 1.0);
+
+        Self {
+            padding: metrics.card_padding * scale,
+            icon: metrics.icon_size * scale,
+            gap: metrics.icon_gap * scale,
+            name: metrics.name_size * scale,
+            line_height_factor: metrics.line_height,
+            radius: metrics.card_radius * scale,
+        }
+    }
+
+    fn line_height(&self) -> f32 {
+        self.name * self.line_height_factor
+    }
+
+    fn label_width(&self, size: f32) -> f32 {
+        (size - self.padding * 2.0).max(0.0)
+    }
+
+    fn label_y(&self, bounds: &Rectangle) -> f32 {
+        bounds.y + self.padding + self.icon + self.gap
+    }
+
+    fn icon_bounds(&self, bounds: &Rectangle) -> Rectangle {
+        Rectangle {
+            x: bounds.x + (bounds.width - self.icon) / 2.0,
+            y: bounds.y + self.padding,
+            width: self.icon,
+            height: self.icon,
+        }
+    }
+}
+
 impl<Renderer> Widget<Message, Theme, Renderer> for FileChip<'_>
 where
     Renderer: text::Renderer + ImageRenderer<Handle = image::Handle>,
@@ -68,17 +113,17 @@ where
         limits: &layout::Limits,
     ) -> layout::Node {
         let available = limits.max();
-        let size = self
+        let self_size = self
             .metrics
             .chip_size
             .min(available.width)
             .min(available.height);
-        let label_width = (size - self.metrics.card_padding * 2.0).max(0.0);
+        let geometry = Geometry::of(&self.metrics, self_size);
 
         let label = truncate::<Renderer>(
             &self.file.file_name,
-            label_width,
-            &self.metrics,
+            geometry.label_width(self_size),
+            &geometry,
             renderer.default_font(),
         );
 
@@ -86,7 +131,7 @@ where
         state.truncated = label != self.file.file_name;
         state.label = label;
 
-        layout::Node::new(Size::new(size, size))
+        layout::Node::new(Size::new(self_size, self_size))
     }
 
     fn update(
@@ -112,7 +157,7 @@ where
                 shell.publish(if hovered {
                     Message::ChipHovered {
                         index: self.index,
-                        y: bounds.y,
+                        position: Point::new(bounds.x, bounds.y),
                         truncated: state.truncated,
                     }
                 } else {
@@ -200,7 +245,7 @@ where
         let state = tree.state.downcast_ref::<State>();
         let hovered = cursor.is_over(bounds);
         let palette = theme::Colors::of(theme);
-        let metrics = self.metrics;
+        let geometry = Geometry::of(&self.metrics, bounds.width);
 
         let background = if state.is_pressed {
             Some(palette.card_pressed)
@@ -227,7 +272,7 @@ where
                     border: Border {
                         color: border_color,
                         width: 1.0,
-                        radius: metrics.card_radius.into(),
+                        radius: geometry.radius.into(),
                     },
                     shadow: Shadow::default(),
                     snap: true,
@@ -246,37 +291,24 @@ where
                     opacity: 1.0,
                     snap: true,
                 },
-                Rectangle {
-                    x: bounds.x + (bounds.width - metrics.icon_size) / 2.0,
-                    y: bounds.y + metrics.card_padding,
-                    width: metrics.icon_size,
-                    height: metrics.icon_size,
-                },
+                geometry.icon_bounds(&bounds),
                 bounds,
             );
         }
 
-        let line_height = metrics.name_size * metrics.line_height;
-
         renderer.fill_text(
             Text {
                 content: state.label.clone(),
-                bounds: Size::new(
-                    (bounds.width - metrics.card_padding * 2.0).max(0.0),
-                    line_height,
-                ),
-                size: Pixels(metrics.name_size),
-                line_height: text::LineHeight::Relative(metrics.line_height),
+                bounds: Size::new(geometry.label_width(bounds.width), geometry.line_height()),
+                size: Pixels(geometry.name),
+                line_height: text::LineHeight::Relative(geometry.line_height_factor),
                 font: renderer.default_font(),
                 align_x: text::Alignment::Center,
                 align_y: Vertical::Top,
                 shaping: text::Shaping::default(),
                 wrapping: text::Wrapping::None,
             },
-            Point::new(
-                bounds.center().x,
-                bounds.y + metrics.card_padding + metrics.icon_size + metrics.icon_gap,
-            ),
+            Point::new(bounds.center().x, geometry.label_y(&bounds)),
             palette.text,
             bounds,
         );
@@ -292,7 +324,7 @@ impl<'a> From<FileChip<'a>> for Element<'a, Message> {
 fn truncate<Renderer>(
     name: &str,
     width: f32,
-    metrics: &Metrics,
+    geometry: &Geometry,
     font: <Renderer as text::Renderer>::Font,
 ) -> String
 where
@@ -301,9 +333,9 @@ where
     let measure = |content: &str| {
         <Renderer::Paragraph as text::Paragraph>::with_text(Text {
             content,
-            bounds: Size::new(f32::INFINITY, metrics.name_size * metrics.line_height),
-            size: Pixels(metrics.name_size),
-            line_height: text::LineHeight::Relative(metrics.line_height),
+            bounds: Size::new(f32::INFINITY, geometry.line_height()),
+            size: Pixels(geometry.name),
+            line_height: text::LineHeight::Relative(geometry.line_height_factor),
             font,
             align_x: text::Alignment::Left,
             align_y: Vertical::Top,

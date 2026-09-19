@@ -1,15 +1,23 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::LazyLock,
     time::{Duration, Instant, SystemTime},
 };
 
 use iced::advanced::image;
 use iced::advanced::text::Wrapping;
-use iced::widget::{column, container, mouse_area, scrollable, text};
-use iced::{Alignment, Element, Length, Task, Theme, window};
+use iced::widget::{
+    column, container, mouse_area, row, scrollable,
+    scrollable::{Direction, Scrollbar},
+    text,
+};
+use iced::{
+    Alignment, Element, Length, Point, Task, Theme,
+    alignment::{Horizontal, Vertical},
+    window,
+};
 
+use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS};
 use crate::platform::{DragHandler, InputEvent, Modifier};
 use crate::theme;
 use crate::widget::FileChip;
@@ -45,9 +53,9 @@ impl OwnedPath {
 }
 
 impl DeferredFile {
-    pub fn new(
+    pub fn new<P: AsRef<Path>>(
         path: PathBuf,
-        cache_path: Option<&Path>,
+        cache_path: Option<P>,
         should_move: bool,
     ) -> std::io::Result<Self> {
         let metadata = std::fs::metadata(&path)?;
@@ -65,7 +73,7 @@ impl DeferredFile {
         let ownership = if should_move {
             match cache_path {
                 Some(cache_path) => {
-                    let stored = cache_path.join(&file_name);
+                    let stored = cache_path.as_ref().join(&file_name);
                     std::fs::copy(&original, &stored)?;
                     Ownership::Owned(OwnedPath::Configured(stored))
                 }
@@ -121,7 +129,7 @@ pub enum Message {
     RelayScrolled(f32),
     ChipHovered {
         index: usize,
-        y: f32,
+        position: Point,
         truncated: bool,
     },
     ChipHoverLeft(usize),
@@ -131,51 +139,38 @@ pub enum Message {
     SlideTick(Instant),
 }
 
-const WINDOW_WIDTH: f32 = 150.0;
-const WINDOW_HEIGHT: f32 = 430.0;
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
-const TRAY_HIDDEN_X: f32 = -WINDOW_WIDTH;
+const TRAY_INSET: f32 = 4.0;
 const TRAY_PEEK_WIDTH: f32 = 16.0;
-const TRAY_PEEK_X: f32 = TRAY_PEEK_WIDTH - WINDOW_WIDTH;
-const TRAY_OPEN_X: f32 = 4.0;
 const TOOLTIP_WIDTH: f32 = 320.0;
 const TOOLTIP_HEIGHT: f32 = 240.0;
 const TOOLTIP_GAP: f32 = 4.0;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(350);
 
-static WINDOW_SETTINGS: LazyLock<window::Settings> = LazyLock::new(|| window::Settings {
-    size: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
-    position: window::Position::SpecificWith(|window, resolution| {
-        let y = (resolution.height - window.height) / 2.0;
-        iced::Point::new(-window.width, y)
-    }),
-    decorations: false,
-    closeable: false,
-    resizable: false,
-    transparent: true,
-    minimizable: false,
-    blur: true,
-    level: window::Level::AlwaysOnTop,
-    exit_on_close_request: false,
-    platform_specific: crate::platform::platform_window_settings(),
-    ..Default::default()
-});
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrayState {
+    Hidden,
+    Peek,
+    Open,
+}
 
 #[derive(Clone, Copy)]
 struct Slide {
     started: Instant,
-    from: f32,
-    to: f32,
+    from: Point,
+    to: Point,
+    hide: bool,
 }
 
 #[derive(Clone, Copy)]
 struct TooltipHover {
     index: usize,
-    y: f32,
+    position: Point,
     since: Instant,
 }
 
 pub struct App {
+    config: config::Config,
     file_relay: Vec<DeferredFile>,
     window_id: Option<window::Id>,
     drag_handler: Box<dyn DragHandler>,
@@ -186,8 +181,8 @@ pub struct App {
     theme: Option<Theme>,
     metrics: theme::Metrics,
     slide: Option<Slide>,
-    resting_y: Option<f32>,
-    window_x: f32,
+    anchor: Option<Point>,
+    position: Point,
     tray_hovered: bool,
     scroll_offset: f32,
     tooltip_hover: Option<TooltipHover>,
@@ -195,7 +190,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> (Self, Task<Message>) {
+    pub fn new(config: config::Config) -> (Self, Task<Message>) {
         let (theme, metrics) = match theme::system() {
             Some((theme, metrics)) => (Some(theme), metrics),
             None => (None, theme::Metrics::default()),
@@ -203,6 +198,7 @@ impl App {
 
         (
             Self {
+                config,
                 file_relay: Vec::new(),
                 window_id: None,
                 drag_handler: crate::platform::get_drag_handler(),
@@ -213,8 +209,8 @@ impl App {
                 theme,
                 metrics,
                 slide: None,
-                resting_y: None,
-                window_x: TRAY_HIDDEN_X,
+                anchor: None,
+                position: Point::ORIGIN,
                 tray_hovered: false,
                 scroll_offset: 0.0,
                 tooltip_hover: None,
@@ -228,13 +224,13 @@ impl App {
         self.theme.clone()
     }
 
-    pub fn add_from_location(
+    pub fn add_from_location<P: AsRef<Path>>(
         &mut self,
         path: PathBuf,
-        cache_path: Option<&Path>,
+        cache_path: Option<P>,
         should_move: bool,
     ) -> std::io::Result<()> {
-        let file = DeferredFile::new(path, cache_path, should_move)?;
+        let file = DeferredFile::new(path, cache_path.as_ref(), should_move)?;
         self.file_relay.push(file);
         Ok(())
     }
@@ -295,30 +291,75 @@ impl App {
             return Task::none();
         }
 
-        let (id, task) = window::open(WINDOW_SETTINGS.clone());
+        let (id, task) = window::open(self.config.window.into_settings());
         self.window_id = Some(id);
-        self.window_x = TRAY_HIDDEN_X;
+        self.anchor = None;
+        self.position = Point::ORIGIN;
         self.scroll_offset = 0.0;
 
         task.discard()
     }
 
-    fn tray_target(&self) -> f32 {
+    fn tray_state(&self) -> TrayState {
         if self.dragging.is_some() || self.drag_handler.is_dragging() || self.tray_hovered {
-            TRAY_OPEN_X
+            TrayState::Open
         } else if self.file_relay.is_empty() {
-            TRAY_HIDDEN_X
+            TrayState::Hidden
         } else {
-            TRAY_PEEK_X
+            TrayState::Peek
         }
     }
 
+    fn tray_point(&self, state: TrayState) -> Option<Point> {
+        let anchor = self.anchor?;
+
+        let point = match self.config.window.side {
+            Side::Left => Point::new(
+                match state {
+                    TrayState::Hidden => -TRAY_THICKNESS,
+                    TrayState::Peek => TRAY_PEEK_WIDTH - TRAY_THICKNESS,
+                    TrayState::Open => TRAY_INSET,
+                },
+                anchor.y,
+            ),
+            Side::Right => Point::new(
+                match state {
+                    TrayState::Hidden => anchor.x,
+                    TrayState::Peek => anchor.x - TRAY_PEEK_WIDTH,
+                    TrayState::Open => anchor.x - TRAY_THICKNESS - TRAY_INSET,
+                },
+                anchor.y,
+            ),
+            Side::Top => Point::new(
+                anchor.x,
+                match state {
+                    TrayState::Hidden => -TRAY_THICKNESS,
+                    TrayState::Peek => TRAY_PEEK_WIDTH - TRAY_THICKNESS,
+                    TrayState::Open => TRAY_INSET,
+                },
+            ),
+            Side::Bottom => Point::new(
+                anchor.x,
+                match state {
+                    TrayState::Hidden => anchor.y,
+                    TrayState::Peek => anchor.y - TRAY_PEEK_WIDTH,
+                    TrayState::Open => anchor.y - TRAY_THICKNESS - TRAY_INSET,
+                },
+            ),
+        };
+
+        Some(point)
+    }
+
     fn sync_tray(&mut self) -> Task<Message> {
-        if self.window_id.is_none() || self.resting_y.is_none() {
+        if self.window_id.is_none() {
             return Task::none();
         }
 
-        let target = self.tray_target();
+        let state = self.tray_state();
+        let Some(target) = self.tray_point(state) else {
+            return Task::none();
+        };
 
         if self.slide.is_some_and(|slide| slide.to == target) {
             return Task::none();
@@ -326,30 +367,50 @@ impl App {
 
         self.slide = Some(Slide {
             started: Instant::now(),
-            from: self.window_x,
+            from: self.position,
             to: target,
+            hide: state == TrayState::Hidden,
         });
 
         Task::none()
     }
 
-    fn tooltip_anchor(&self, y: f32) -> f32 {
-        let resting_y = self.resting_y.unwrap_or(0.0);
-        let top = resting_y + y - self.scroll_offset;
+    fn tooltip_origin(&self, chip: Point) -> Option<Point> {
+        let open = self.tray_point(TrayState::Open)?;
 
-        top.clamp(
-            resting_y,
-            resting_y + (WINDOW_HEIGHT - TOOLTIP_HEIGHT).max(0.0),
-        )
+        let origin = if self.config.window.side.horizontal() {
+            let x = open.x + chip.x - self.scroll_offset;
+            let x = x.clamp(open.x, open.x + (TRAY_LENGTH - TOOLTIP_WIDTH).max(0.0));
+            let y = if self.config.window.side == Side::Bottom {
+                open.y - TOOLTIP_HEIGHT - TOOLTIP_GAP
+            } else {
+                open.y + TRAY_THICKNESS + TOOLTIP_GAP
+            };
+
+            Point::new(x, y)
+        } else {
+            let y = open.y + chip.y - self.scroll_offset;
+            let y = y.clamp(open.y, open.y + (TRAY_LENGTH - TOOLTIP_HEIGHT).max(0.0));
+            let x = if self.config.window.side == Side::Right {
+                open.x - TOOLTIP_WIDTH - TOOLTIP_GAP
+            } else {
+                open.x + TRAY_THICKNESS + TOOLTIP_GAP
+            };
+
+            Point::new(x, y)
+        };
+
+        Some(origin)
     }
 
-    fn open_tooltip(&mut self, y: f32) -> Task<Message> {
+    fn open_tooltip(&mut self, chip: Point) -> Task<Message> {
+        let Some(position) = self.tooltip_origin(chip) else {
+            return Task::none();
+        };
+
         let settings = window::Settings {
             size: (TOOLTIP_WIDTH, TOOLTIP_HEIGHT).into(),
-            position: window::Position::Specific(iced::Point::new(
-                WINDOW_WIDTH + TOOLTIP_GAP,
-                self.tooltip_anchor(y),
-            )),
+            position: window::Position::Specific(position),
             decorations: false,
             closeable: false,
             resizable: false,
@@ -367,15 +428,15 @@ impl App {
         task.discard()
     }
 
-    fn move_tooltip(&mut self, y: f32) -> Task<Message> {
+    fn move_tooltip(&mut self, chip: Point) -> Task<Message> {
         let Some(id) = self.tooltip_window else {
             return Task::none();
         };
 
-        window::move_to(
-            id,
-            iced::Point::new(WINDOW_WIDTH + TOOLTIP_GAP, self.tooltip_anchor(y)),
-        )
+        match self.tooltip_origin(chip) {
+            Some(position) => window::move_to(id, position),
+            None => Task::none(),
+        }
     }
 
     fn close_tooltip(&mut self) -> Task<Message> {
@@ -400,7 +461,7 @@ impl App {
             .map(|file| file.file_name.as_str())
             .unwrap_or_default();
 
-        container(
+        let card = container(
             text(name)
                 .size(self.metrics.name_size)
                 .wrapping(Wrapping::WordOrGlyph),
@@ -408,8 +469,20 @@ impl App {
         .style(theme::tooltip)
         .padding(theme::CARD_PADDING)
         .width(Length::Shrink)
-        .height(Length::Shrink)
-        .into()
+        .height(Length::Shrink);
+
+        let (align_x, align_y) = match self.config.window.side {
+            Side::Right => (Horizontal::Right, Vertical::Top),
+            Side::Bottom => (Horizontal::Left, Vertical::Bottom),
+            Side::Left | Side::Top => (Horizontal::Left, Vertical::Top),
+        };
+
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(align_x)
+            .align_y(align_y)
+            .into()
     }
 
     fn relay_view(&self) -> Element<'_, Message> {
@@ -422,16 +495,37 @@ impl App {
             })
             .collect();
 
+        let horizontal = self.config.window.side.horizontal();
+
+        let content: Element<'_, Message> = if horizontal {
+            row(files)
+                .spacing(theme::SPACING)
+                .align_y(Alignment::Center)
+                .height(Length::Fill)
+                .into()
+        } else {
+            column(files)
+                .spacing(theme::SPACING)
+                .align_x(Alignment::Center)
+                .width(Length::Fill)
+                .into()
+        };
+
+        let scrollable = if horizontal {
+            scrollable(content).direction(Direction::Horizontal(Scrollbar::default()))
+        } else {
+            scrollable(content)
+        };
+
         mouse_area(
             container(
-                scrollable(
-                    column(files)
-                        .spacing(theme::SPACING)
-                        .align_x(Alignment::Center)
-                        .width(Length::Fill),
-                )
-                .height(Length::Fill)
-                .on_scroll(|viewport| Message::RelayScrolled(viewport.absolute_offset().y)),
+                scrollable
+                    .height(Length::Fill)
+                    .width(Length::Fill)
+                    .on_scroll(move |viewport| {
+                        let offset = viewport.absolute_offset();
+                        Message::RelayScrolled(if horizontal { offset.x } else { offset.y })
+                    }),
             )
             .style(theme::surface)
             .padding(theme::VIEW_PADDING)
@@ -520,17 +614,28 @@ impl App {
 
                 let should_move = crate::platform::modifiers().contains(Modifier::Alt);
 
-                if let Err(err) = self.add_from_location(path.clone(), None, should_move) {
+                let cache_path = PathBuf::from(self.config.preferences.cache_dir.clone());
+                if let Err(err) =
+                    self.add_from_location(path.clone(), Some(cache_path), should_move)
+                {
                     eprintln!("failed to add {path:?}: {err}");
                 }
 
                 Task::none()
             }
             Message::TrayMenuClicked(id) => {
-                if id == "quit" {
-                    return iced::exit();
-                }
-                Task::none()
+                return match id.as_str() {
+                    "quit" => iced::exit(),
+                    "config_file" => {
+                        open::that(&self.config.path()).ok();
+                        Task::none()
+                    }
+                    "reload_config_file" => {
+                        self.config = config::Config::load(&self.config.path()).unwrap_or_default();
+                        Task::none()
+                    }
+                    _ => Task::none(),
+                };
             }
             Message::SystemThemeChanged => {
                 if let Some((theme, metrics)) = theme::system() {
@@ -561,8 +666,8 @@ impl App {
                 };
 
                 if self.window_id.is_some() {
-                    self.window_x = position.x;
-                    self.resting_y = Some(position.y);
+                    self.anchor = Some(position);
+                    self.position = position;
                     return self.sync_tray();
                 }
 
@@ -573,7 +678,7 @@ impl App {
                     return Task::none();
                 };
 
-                let (Some(id), Some(y)) = (self.window_id, self.resting_y) else {
+                let Some(id) = self.window_id else {
                     self.slide = None;
                     return Task::none();
                 };
@@ -581,17 +686,20 @@ impl App {
                 let elapsed = now.saturating_duration_since(slide.started).as_secs_f32();
                 let progress = (elapsed / SLIDE_DURATION.as_secs_f32()).clamp(0.0, 1.0);
                 let eased = ease_out_cubic(progress);
-                let x = slide.from + (slide.to - slide.from) * eased;
+                let point = Point::new(
+                    slide.from.x + (slide.to.x - slide.from.x) * eased,
+                    slide.from.y + (slide.to.y - slide.from.y) * eased,
+                );
 
-                self.window_x = x;
+                self.position = point;
 
                 if progress < 1.0 {
-                    return window::move_to(id, iced::Point::new(x, y));
+                    return window::move_to(id, point);
                 }
 
                 self.slide = None;
 
-                if slide.to == TRAY_HIDDEN_X {
+                if slide.hide {
                     self.window_id = None;
                     self.tooltip_hover = None;
                     let tooltip = self.close_tooltip();
@@ -599,7 +707,7 @@ impl App {
                     return Task::batch([tooltip, window::close(id)]);
                 }
 
-                window::move_to(id, iced::Point::new(slide.to, y))
+                window::move_to(id, slide.to)
             }
             Message::TrayEntered => {
                 self.tray_hovered = true;
@@ -615,7 +723,7 @@ impl App {
             }
             Message::ChipHovered {
                 index,
-                y,
+                position,
                 truncated,
             } => {
                 if !truncated {
@@ -624,11 +732,11 @@ impl App {
 
                 self.tooltip_hover = Some(TooltipHover {
                     index,
-                    y,
+                    position,
                     since: Instant::now(),
                 });
 
-                self.move_tooltip(y)
+                self.move_tooltip(position)
             }
             Message::ChipHoverLeft(index) => {
                 if self.tooltip_hover.is_some_and(|hover| hover.index == index) {
@@ -651,7 +759,7 @@ impl App {
                     return Task::none();
                 }
 
-                self.open_tooltip(hover.y)
+                self.open_tooltip(hover.position)
             }
         }
     }

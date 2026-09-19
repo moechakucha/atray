@@ -8,6 +8,7 @@ use tray_icon::{
 use crate::app::App;
 
 mod app;
+mod config;
 mod font;
 mod platform;
 mod theme;
@@ -20,17 +21,40 @@ fn load_icon(bytes: &[u8]) -> anyhow::Result<Icon> {
     Ok(Icon::from_rgba(rgba, width, height)?)
 }
 
+fn construct_menu(version: &str) -> anyhow::Result<Menu> {
+    let version_label = MenuItem::new(format!("Version {version}"), false, None);
+    let config_file_button = MenuItem::with_id("config_file", "Open Config File", true, None);
+    let reload_config_file_button =
+        MenuItem::with_id("reload_config_file", "Reload Config File", true, None);
+    let quit_button = MenuItem::with_id("quit", "Quit", true, None);
+
+    Ok(Menu::with_items(&[
+        &version_label,
+        &config_file_button,
+        &reload_config_file_button,
+        &quit_button,
+    ])?)
+}
+
 fn main() -> anyhow::Result<()> {
     platform::app_init()?;
     platform::init_input();
 
+    let config_dir = dirs::config_dir()
+        .context("failed to retrieve system config dir")?
+        .join("atray");
+    if !config_dir.exists() {
+        std::fs::create_dir_all(&config_dir)?;
+    }
+
+    let config_path = config_dir.join("config.toml");
+    let config = config::Config::load(&config_path)?;
+    config.save_to_original()?;
+
     let version = env!("CARGO_PKG_VERSION");
     let icon_bytes = include_bytes!("../assets/icon.png");
 
-    let version_label = MenuItem::new(format!("Version {version}"), false, None);
-    let quit_button = MenuItem::with_id("quit", "Quit", true, None);
-
-    let menu = Menu::with_items(&[&version_label, &quit_button])?;
+    let menu = construct_menu(&version)?;
 
     let _tray_icon = tray_icon::TrayIconBuilder::new()
         .with_icon(load_icon(icon_bytes)?)
@@ -40,7 +64,7 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("failed to build tray icon")?;
 
-    let daemon = iced::daemon(App::new, App::update, App::view)
+    let daemon = iced::daemon(move || App::new(config.clone()), App::update, App::view)
         .theme(App::theme)
         .style(|_, theme| iced::theme::Style {
             background_color: Color::TRANSPARENT,
