@@ -2,7 +2,7 @@ use anyhow::Context;
 use iced::Color;
 use tray_icon::{
     Icon,
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
 };
 
 use crate::app::App;
@@ -30,8 +30,10 @@ fn construct_menu(version: &str) -> anyhow::Result<Menu> {
 
     Ok(Menu::with_items(&[
         &version_label,
+        &PredefinedMenuItem::separator(),
         &config_file_button,
         &reload_config_file_button,
+        &PredefinedMenuItem::separator(),
         &quit_button,
     ])?)
 }
