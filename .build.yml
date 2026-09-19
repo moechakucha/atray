@@ -61,6 +61,8 @@ tasks:
       set -eux
       . "$HOME/.cargo/env"
 
+      cd "$HOME/atray"
+
       export PATH="$OSXCROSS/target/bin:$PATH"
       export DMG_TOOL="$LIBDMG_HFSPLUS/dmg/dmg"
 
