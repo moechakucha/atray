@@ -1,4 +1,7 @@
-# atray
+<h1>
+  <img src="./assets/icon.png" width="30" style="vertical-align: middle; margin-right: 8px;">
+  <span>atray</span>
+</h1>
 
 ~~i probably should add an 's'~~
 
