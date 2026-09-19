@@ -40,8 +40,13 @@ rdev = { git = "https://github.com/Narsil/rdev.git", features = ["wayland", "x11
 block2 = "0.6"
 native-theme = { version = "0.5.8", features = ["macos"] }
 objc2 = "0.6"
-objc2-core-graphics = { version = "0.3", features = ["CGEventSource", "CGEventTypes"] }
+objc2-core-graphics = { version = "0.3", features = [
+    "CGEventSource",
+    "CGEventTypes",
+    "CGImage",
+] }
 objc2-foundation = "0.3"
+objc2-quick-look-thumbnailing = "0.3"
 objc2-app-kit = { version = "0.3", features = [
     "NSDragging",
     "NSDraggingItem",

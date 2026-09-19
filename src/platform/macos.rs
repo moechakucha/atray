@@ -5,6 +5,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicIsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use block2::RcBlock;
@@ -15,11 +16,17 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSDragOperation, NSDraggingContext,
-    NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSPasteboard,
-    NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
+    NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSImage,
+    NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
 };
 use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSDate, NSError, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
+};
+use objc2_quick_look_thumbnailing::{
+    QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
+    QLThumbnailGenerator, QLThumbnailRepresentation,
+};
 
 use crate::platform::{
     DragHandler, FileIcon, InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch,
@@ -305,15 +312,91 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
 
 pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {
     let size = size.max(1);
+
+    quicklook_thumbnail(path, size).or_else(|| workspace_icon(path, size))
+}
+
+fn workspace_icon(path: &Path, size: u32) -> Option<FileIcon> {
     let workspace = NSWorkspace::sharedWorkspace();
     let image = workspace.iconForFile(&NSString::from_str(&path.to_string_lossy()));
+
+    decode_image(&image, size, false)
+}
+
+fn quicklook_thumbnail(path: &Path, size: u32) -> Option<FileIcon> {
+    let url = NSURL::from_file_path(path)?;
+
+    let tiff: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let handler = {
+        let tiff = Arc::clone(&tiff);
+        let done = Arc::clone(&done);
+
+        RcBlock::new(
+            move |thumbnail: *mut QLThumbnailRepresentation, _error: *mut NSError| {
+                if let Some(thumbnail) = unsafe { thumbnail.as_ref() } {
+                    let image = unsafe { thumbnail.NSImage() };
+
+                    *tiff.lock().unwrap() = image.TIFFRepresentation().map(|tiff| tiff.to_vec());
+                }
+
+                done.store(true, Ordering::Release);
+            },
+        )
+    };
+
+    let request = unsafe {
+        QLThumbnailGenerationRequest::initWithFileAtURL_size_scale_representationTypes(
+            QLThumbnailGenerationRequest::alloc(),
+            &url,
+            NSSize::new(size as f64, size as f64),
+            1.0,
+            QLThumbnailGenerationRequestRepresentationTypes::All,
+        )
+    };
+
+    unsafe {
+        QLThumbnailGenerator::sharedGenerator()
+            .generateBestRepresentationForRequest_completionHandler(&request, &handler);
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+
+    while !done.load(Ordering::Acquire) && Instant::now() < deadline {
+        NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.005));
+    }
+
+    let tiff = tiff.lock().unwrap().take()?;
+
+    decode_tiff(&tiff, size, true)
+}
+
+fn decode_image(image: &NSImage, size: u32, fit: bool) -> Option<FileIcon> {
     let representation = image.TIFFRepresentation()?;
-    let source =
-        image::load_from_memory_with_format(&representation.to_vec(), image::ImageFormat::Tiff)
-            .ok()?;
-    let icon = source
-        .resize_exact(size, size, image::imageops::FilterType::Lanczos3)
-        .to_rgba8();
+
+    decode_tiff(&representation.to_vec(), size, fit)
+}
+
+fn decode_tiff(tiff: &[u8], size: u32, fit: bool) -> Option<FileIcon> {
+    let source = image::load_from_memory_with_format(tiff, image::ImageFormat::Tiff).ok()?;
+
+    let icon = if fit {
+        let scaled = source
+            .resize(size, size, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let mut canvas = image::RgbaImage::new(size, size);
+        let x = ((size - scaled.width()) / 2) as i64;
+        let y = ((size - scaled.height()) / 2) as i64;
+
+        image::imageops::overlay(&mut canvas, &scaled, x, y);
+
+        canvas
+    } else {
+        source
+            .resize_exact(size, size, image::imageops::FilterType::Lanczos3)
+            .to_rgba8()
+    };
 
     Some(FileIcon {
         width: icon.width(),
