@@ -137,7 +137,7 @@ const SLIDE_DURATION: Duration = Duration::from_millis(220);
 const TRAY_HIDDEN_X: f32 = -WINDOW_WIDTH;
 const TRAY_PEEK_WIDTH: f32 = 16.0;
 const TRAY_PEEK_X: f32 = TRAY_PEEK_WIDTH - WINDOW_WIDTH;
-const TRAY_OPEN_X: f32 = 0.0;
+const TRAY_OPEN_X: f32 = 4.0;
 const TOOLTIP_WIDTH: f32 = 320.0;
 const TOOLTIP_HEIGHT: f32 = 240.0;
 const TOOLTIP_GAP: f32 = 4.0;
@@ -765,7 +765,7 @@ fn ease_out_cubic(t: f32) -> f32 {
 }
 
 fn slide_ticks() -> impl iced::futures::Stream<Item = Message> {
-    ticks(16, || Message::SlideTick(Instant::now()))
+    ticks(5, || Message::SlideTick(Instant::now()))
 }
 
 fn drag_completion_ticks() -> impl iced::futures::Stream<Item = Message> {
