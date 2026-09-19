@@ -13,9 +13,9 @@ pub struct Config {
     #[serde(skip)]
     path: PathBuf,
     #[serde(default)]
-    pub drag: DragConfig,
+    pub behavior: BehaviorConfig,
     #[serde(default)]
-    pub window: WindowConfig,
+    pub appearance: AppearanceConfig,
     #[serde(default)]
     pub advanced: AdvancedConfig,
 }
@@ -58,8 +58,8 @@ impl Default for Config {
                 .join("config.toml")
                 .to_path_buf(),
             advanced: AdvancedConfig::default(),
-            drag: DragConfig::default(),
-            window: WindowConfig::default(),
+            behavior: BehaviorConfig::default(),
+            appearance: AppearanceConfig::default(),
         }
     }
 }
@@ -82,14 +82,14 @@ impl Default for AdvancedConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DragConfig {
+pub struct BehaviorConfig {
     pub move_modifier: crate::input::Modifier,
     pub invert_copy_and_move: bool,
     #[serde(default)]
     pub filter: Vec<FilterRule>,
 }
 
-impl DragConfig {
+impl BehaviorConfig {
     pub fn allows(&self, source: Option<&crate::platform::DragSource>) -> bool {
         self.filter
             .iter()
@@ -98,7 +98,7 @@ impl DragConfig {
     }
 }
 
-impl Default for DragConfig {
+impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
             move_modifier: crate::input::Modifier::Shift,
@@ -170,12 +170,23 @@ pub enum FilterAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WindowConfig {
+pub struct AppearanceConfig {
     #[serde(default)]
     pub side: Side,
+    #[serde(default)]
+    pub theme: ThemeMode,
 }
 
-impl WindowConfig {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl AppearanceConfig {
     pub fn into_settings(&self) -> window::Settings {
         window::Settings {
             size: window_size(self.side).into(),
@@ -222,10 +233,11 @@ pub fn window_size(side: Side) -> Size {
     }
 }
 
-impl Default for WindowConfig {
+impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             side: Side::default(),
+            theme: ThemeMode::default(),
         }
     }
 }

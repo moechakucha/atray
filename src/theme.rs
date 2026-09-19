@@ -1,7 +1,10 @@
+use iced::theme::Mode;
 use iced::theme::palette as iced_palette;
 use iced::widget::container;
 use iced::{Background, Border, Color, Theme};
-use native_theme_iced::ResolvedTheme;
+use native_theme_iced::{ColorMode, ResolvedTheme};
+
+use crate::config::ThemeMode;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Colors {
@@ -116,10 +119,40 @@ impl Colors {
     }
 }
 
-pub fn system() -> Option<(Theme, Metrics)> {
-    native_theme_iced::from_system()
-        .ok()
-        .map(|(theme, resolved, _)| (theme, Metrics::of(&resolved)))
+pub fn resolve(mode: ThemeMode, system: Mode) -> (Option<Theme>, Metrics) {
+    let system_theme = native_theme_iced::SystemTheme::from_system().ok();
+
+    let color = match mode {
+        ThemeMode::Light => ColorMode::Light,
+        ThemeMode::Dark => ColorMode::Dark,
+        ThemeMode::System => match system {
+            Mode::Dark => ColorMode::Dark,
+            Mode::Light => ColorMode::Light,
+            Mode::None => match &system_theme {
+                Some(system_theme) => system_theme.mode,
+                None => ColorMode::Light,
+            },
+        },
+    };
+
+    match &system_theme {
+        Some(system_theme) => {
+            let resolved = system_theme.pick(color);
+
+            (
+                Some(native_theme_iced::to_theme(resolved, &system_theme.name)),
+                Metrics::of(resolved),
+            )
+        }
+        None => {
+            let theme = match color {
+                ColorMode::Dark => Theme::Dark,
+                _ => Theme::Light,
+            };
+
+            (Some(theme), Metrics::default())
+        }
+    }
 }
 
 pub fn surface(theme: &Theme) -> container::Style {

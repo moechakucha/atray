@@ -283,7 +283,7 @@ pub enum Message {
     FileTakenOut(usize),
     PollDragResult,
     TrayMenuClicked(String),
-    SystemThemeChanged,
+    SystemThemeChanged(iced::theme::Mode),
     RelayOpened(window::Id),
     RelayPositioned(Option<iced::Point>),
     RelayScrolled(f32),
@@ -340,6 +340,7 @@ pub struct App {
     hovered: bool,
     theme: Option<Theme>,
     metrics: theme::Metrics,
+    system_mode: iced::theme::Mode,
     slide: Option<Slide>,
     anchor: Option<Point>,
     position: Point,
@@ -351,10 +352,8 @@ pub struct App {
 
 impl App {
     pub fn new(config: config::Config) -> (Self, Task<Message>) {
-        let (theme, metrics) = match theme::system() {
-            Some((theme, metrics)) => (Some(theme), metrics),
-            None => (None, theme::Metrics::default()),
-        };
+        let system_mode = detected_system_mode();
+        let (theme, metrics) = theme::resolve(config.appearance.theme, system_mode);
 
         let file_relay = load_cache(Path::new(&config.advanced.cache_dir));
 
@@ -369,6 +368,7 @@ impl App {
             hovered: false,
             theme,
             metrics,
+            system_mode,
             slide: None,
             anchor: None,
             position: Point::ORIGIN,
@@ -389,6 +389,12 @@ impl App {
 
     pub fn theme(&self, _id: window::Id) -> Option<Theme> {
         self.theme.clone()
+    }
+
+    fn refresh_theme(&mut self) {
+        let (theme, metrics) = theme::resolve(self.config.appearance.theme, self.system_mode);
+        self.theme = theme;
+        self.metrics = metrics;
     }
 
     pub fn add_from_location<P: AsRef<Path>>(
@@ -458,7 +464,9 @@ impl App {
             return Task::none();
         }
 
-        let (id, task) = window::open(self.config.window.into_settings());
+        self.refresh_theme();
+
+        let (id, task) = window::open(self.config.appearance.into_settings());
         self.window_id = Some(id);
         self.anchor = None;
         self.position = Point::ORIGIN;
@@ -514,7 +522,7 @@ impl App {
 
     fn source_allowed(&self) -> bool {
         self.config
-            .drag
+            .behavior
             .allows(crate::platform::drag_source().as_ref())
     }
 
@@ -533,7 +541,7 @@ impl App {
     fn tray_point(&self, state: TrayState) -> Option<Point> {
         let anchor = self.anchor?;
 
-        let point = match self.config.window.side {
+        let point = match self.config.appearance.side {
             Side::Left => Point::new(
                 match state {
                     TrayState::Hidden => -TRAY_THICKNESS,
@@ -598,10 +606,10 @@ impl App {
     fn tooltip_origin(&self, chip: Point) -> Option<Point> {
         let open = self.tray_point(TrayState::Open)?;
 
-        let origin = if self.config.window.side.horizontal() {
+        let origin = if self.config.appearance.side.horizontal() {
             let x = open.x + chip.x - self.scroll_offset;
             let x = x.clamp(open.x, open.x + (TRAY_LENGTH - TOOLTIP_WIDTH).max(0.0));
-            let y = if self.config.window.side == Side::Bottom {
+            let y = if self.config.appearance.side == Side::Bottom {
                 open.y - TOOLTIP_HEIGHT - TOOLTIP_GAP
             } else {
                 open.y + TRAY_THICKNESS + TOOLTIP_GAP
@@ -611,7 +619,7 @@ impl App {
         } else {
             let y = open.y + chip.y - self.scroll_offset;
             let y = y.clamp(open.y, open.y + (TRAY_LENGTH - TOOLTIP_HEIGHT).max(0.0));
-            let x = if self.config.window.side == Side::Right {
+            let x = if self.config.appearance.side == Side::Right {
                 open.x - TOOLTIP_WIDTH - TOOLTIP_GAP
             } else {
                 open.x + TRAY_THICKNESS + TOOLTIP_GAP
@@ -691,7 +699,7 @@ impl App {
         .width(Length::Shrink)
         .height(Length::Shrink);
 
-        let (align_x, align_y) = match self.config.window.side {
+        let (align_x, align_y) = match self.config.appearance.side {
             Side::Right => (Horizontal::Right, Vertical::Top),
             Side::Bottom => (Horizontal::Left, Vertical::Bottom),
             Side::Left | Side::Top => (Horizontal::Left, Vertical::Top),
@@ -715,7 +723,7 @@ impl App {
             })
             .collect();
 
-        let horizontal = self.config.window.side.horizontal();
+        let horizontal = self.config.appearance.side.horizontal();
 
         let content: Element<'_, Message> = if horizontal {
             row(files)
@@ -836,8 +844,8 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = input::modifiers().contains(self.config.drag.move_modifier)
-                    ^ self.config.drag.invert_copy_and_move;
+                let should_move = input::modifiers().contains(self.config.behavior.move_modifier)
+                    ^ self.config.behavior.invert_copy_and_move;
 
                 let cache_dir = self.config.advanced.cache_dir.clone();
                 let cache_path = if cache_dir.is_empty() {
@@ -862,10 +870,12 @@ impl App {
                         Task::none()
                     }
                     "reload_config_file" => {
-                        let previous = self.config.window.clone();
+                        let previous_side = self.config.appearance.side;
                         self.config = config::Config::load(self.config.path()).unwrap_or_default();
 
-                        if self.config.window == previous {
+                        self.refresh_theme();
+
+                        if self.config.appearance.side == previous_side {
                             Task::none()
                         } else {
                             self.restart_tray()
@@ -874,11 +884,9 @@ impl App {
                     _ => Task::none(),
                 };
             }
-            Message::SystemThemeChanged => {
-                if let Some((theme, metrics)) = theme::system() {
-                    self.theme = Some(theme);
-                    self.metrics = metrics;
-                }
+            Message::SystemThemeChanged(mode) => {
+                self.system_mode = mode;
+                self.refresh_theme();
 
                 Task::none()
             }
@@ -888,10 +896,11 @@ impl App {
                 }
 
                 if self.window_id == Some(id) {
-                    window::position(id).map(Message::RelayPositioned)
-                } else {
-                    Task::none()
+                    self.refresh_theme();
+                    return window::position(id).map(Message::RelayPositioned);
                 }
+
+                Task::none()
             }
             Message::RelayPositioned(position) => {
                 let Some(position) = position else {
@@ -1002,6 +1011,12 @@ impl App {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
+        let system_theme = if self.config.appearance.theme == config::ThemeMode::System {
+            iced::Subscription::run(system_theme_stream)
+        } else {
+            iced::Subscription::none()
+        };
+
         iced::Subscription::batch(vec![
             self.listen_to_drag(),
             self.listen_to_input(),
@@ -1011,7 +1026,8 @@ impl App {
             self.listen_to_window_opens(),
             self.listen_for_tooltip(),
             self.listen_to_slide(),
-            iced::system::theme_changes().map(|_| Message::SystemThemeChanged),
+            iced::system::theme_changes().map(Message::SystemThemeChanged),
+            system_theme,
         ])
     }
 
@@ -1141,6 +1157,42 @@ fn ticks(interval_ms: u64, message: fn() -> Message) -> impl iced::futures::Stre
                     Ok(()) => {}
                     Err(err) if err.is_disconnected() => break,
                     Err(_) => {}
+                }
+            }
+
+            let _ = exit_tx.send(());
+        });
+
+        let _ = exit_rx.await;
+    })
+}
+
+fn detected_system_mode() -> iced::theme::Mode {
+    match dark_light::detect() {
+        Ok(dark_light::Mode::Dark) => iced::theme::Mode::Dark,
+        Ok(dark_light::Mode::Light) => iced::theme::Mode::Light,
+        _ => iced::theme::Mode::None,
+    }
+}
+
+fn system_theme_stream() -> impl iced::futures::Stream<Item = Message> {
+    use iced::futures::channel::{mpsc, oneshot};
+
+    iced::stream::channel(10, move |mut output: mpsc::Sender<Message>| async move {
+        let (exit_tx, exit_rx) = oneshot::channel();
+
+        std::thread::spawn(move || {
+            if let Ok(watcher) = dark_light::subscribe() {
+                for mode in watcher.iter() {
+                    let mode = match mode {
+                        dark_light::Mode::Dark => iced::theme::Mode::Dark,
+                        dark_light::Mode::Light => iced::theme::Mode::Light,
+                        _ => iced::theme::Mode::None,
+                    };
+
+                    if output.try_send(Message::SystemThemeChanged(mode)).is_err() {
+                        break;
+                    }
                 }
             }
 

@@ -14,6 +14,7 @@ deb_depends = ["libc6", "libx11-6", "libxkbcommon0", "libwayland-client0"]
 
 [dependencies]
 anyhow = "1"
+dark-light = "3"
 dirs = "7"
 findfont = "0.2"
 font-kit = "0.14"
