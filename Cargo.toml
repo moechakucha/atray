@@ -62,3 +62,6 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWindow",
     "NSWorkspace",
 ] }
+
+[workspace]
+members = [".", "xtask"]

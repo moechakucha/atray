@@ -1,0 +1,95 @@
+image: debian/stable
+
+packages:
+  - bison
+  - build-essential
+  - clang
+  - cmake
+  - curl
+  - flex
+  - genisoimage
+  - git
+  - libbz2-dev
+  - liblzma-dev
+  - libssl-dev
+  - libxml2-dev
+  - lld
+  - llvm
+  - patch
+  - pkg-config
+  - python3
+  - xz-utils
+  - zlib1g-dev
+
+environment:
+  TARGETS: aarch64-apple-darwin
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  MACOS_SDK_URL: https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
+  OSXCROSS: /home/build/osxcross
+  LIBDMG_HFSPLUS: /home/build/libdmg-hfsplus
+
+sources:
+  - https://git.sr.ht/~flamarine/atray
+
+tasks:
+  - setup: |
+      set -eux
+
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain stable
+      . "$HOME/.cargo/env"
+
+      for target in $TARGETS; do
+        rustup target add "$target"
+      done
+
+      if [ ! -d "$OSXCROSS/.git" ]; then
+        git clone --depth 1 https://github.com/tpoechtrager/osxcross "$OSXCROSS"
+      fi
+
+      mkdir -p "$OSXCROSS/tarballs"
+      curl -L --fail -o "$OSXCROSS/tarballs/$(basename "$MACOS_SDK_URL")" "$MACOS_SDK_URL"
+      ( cd "$OSXCROSS" && UNATTENDED=1 ./build.sh )
+
+      if [ ! -d "$LIBDMG_HFSPLUS/.git" ]; then
+        git clone --depth 1 https://github.com/fanquake/libdmg-hfsplus "$LIBDMG_HFSPLUS"
+      fi
+
+      ( cd "$LIBDMG_HFSPLUS" && cmake . && make -j"$(nproc)" )
+
+  - bundle: |
+      set -eux
+      . "$HOME/.cargo/env"
+
+      export PATH="$OSXCROSS/target/bin:$PATH"
+      export DMG_TOOL="$LIBDMG_HFSPLUS/dmg/dmg"
+
+      for target in $TARGETS; do
+        case "${target%%-*}" in
+          aarch64|arm64) pattern='arm64|aarch64' ;;
+          x86_64) pattern='x86_64' ;;
+          *)
+            echo "unsupported target: $target" >&2
+            exit 1
+            ;;
+        esac
+
+        clang="$(ls "$OSXCROSS/target/bin" | grep -E "^($pattern)-apple-darwin.*-clang$" | head -n1)"
+
+        if [ -z "$clang" ]; then
+          echo "no osxcross clang wrapper for $target" >&2
+          exit 1
+        fi
+
+        upper="$(printf '%s' "$target" | tr 'a-z-' 'A-Z_')"
+        lower="$(printf '%s' "$target" | tr '-' '_')"
+
+        env \
+          "CARGO_TARGET_${upper}_LINKER=$clang" \
+          "CC_${lower}=$clang" \
+          "CXX_${lower}=${clang}++" \
+          cargo xtask dmg --target "$target" --out dist
+      done
+
+artifacts:
+  - atray/dist/*.dmg
