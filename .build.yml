@@ -22,7 +22,7 @@ packages:
   - zlib1g-dev
 
 environment:
-  TARGETS: aarch64-apple-darwin
+  TARGETS: aarch64-apple-darwin x86_64-apple-darwin
   MACOSX_DEPLOYMENT_TARGET: "11.0"
   MACOS_SDK_URL: https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
   OSXCROSS: /home/build/osxcross
@@ -95,3 +95,4 @@ tasks:
 
 artifacts:
   - atray/dist/atray-aarch64.dmg
+  - atray/dist/atray-x86_64.dmg
