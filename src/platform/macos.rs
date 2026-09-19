@@ -20,7 +20,11 @@ use objc2_app_kit::{
     NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
 };
 
-use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_graphics::{
+    CGEventFlags, CGEventSource, CGEventSourceStateID, CGWindowListCopyWindowInfo,
+    CGWindowListOption, kCGNullWindowID, kCGWindowLayer, kCGWindowName, kCGWindowOwnerName,
+};
 use objc2_foundation::{
     NSArray, NSDate, NSError, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
 };
@@ -30,7 +34,7 @@ use objc2_quick_look_thumbnailing::{
 };
 
 use crate::input::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
-use crate::platform::{DragHandler, FileIcon};
+use crate::platform::{DragHandler, DragSource, FileIcon};
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
 
@@ -51,12 +55,12 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[ivars = DragSourceIvars]
     #[name = "AtrayDragSource"]
-    struct DragSource;
+    struct AtrayDragSource;
 
-    unsafe impl NSObjectProtocol for DragSource {}
+    unsafe impl NSObjectProtocol for AtrayDragSource {}
 
     #[allow(non_snake_case)]
-    unsafe impl NSDraggingSource for DragSource {
+    unsafe impl NSDraggingSource for AtrayDragSource {
         #[unsafe(method(draggingSession:sourceOperationMaskForDraggingContext:))]
         fn draggingSession_sourceOperationMaskForDraggingContext(
             &self,
@@ -89,7 +93,7 @@ define_class!(
     }
 );
 
-impl DragSource {
+impl AtrayDragSource {
     fn new(mtm: MainThreadMarker, result: Arc<Mutex<Option<bool>>>) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DragSourceIvars { result });
         unsafe { msg_send![super(this), init] }
@@ -266,7 +270,7 @@ fn begin_drag(
     }
 
     let items = NSArray::from_retained_slice(&items);
-    let source = DragSource::new(mtm, Arc::clone(result));
+    let source = AtrayDragSource::new(mtm, Arc::clone(result));
     let source: DragSourceHandle = ProtocolObject::from_retained(source);
 
     window.beginDraggingSessionWithItems_event_source(&items, event, &source);
@@ -308,6 +312,55 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
         title_hidden: true,
         ..Default::default()
     }
+}
+
+pub fn drag_source() -> Option<DragSource> {
+    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let app_name = app.localizedName().map(|name| name.to_string());
+    let window_title = app_name.as_deref().and_then(front_window_title);
+
+    Some(DragSource {
+        app_name,
+        window_title,
+    })
+}
+
+fn front_window_title(owner: &str) -> Option<String> {
+    let windows = CGWindowListCopyWindowInfo(
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+
+    let windows: CFRetained<CFArray<CFDictionary<CFString, CFType>>> =
+        unsafe { CFRetained::cast_unchecked(windows) };
+
+    for window in windows.iter() {
+        let layer = window
+            .get(unsafe { kCGWindowLayer })
+            .and_then(|value| value.downcast::<CFNumber>().ok())
+            .and_then(|number| number.as_i32());
+
+        if layer != Some(0) {
+            continue;
+        }
+
+        let window_owner = window
+            .get(unsafe { kCGWindowOwnerName })
+            .and_then(|value| value.downcast::<CFString>().ok())
+            .map(|name| name.to_string());
+
+        if window_owner.as_deref() != Some(owner) {
+            continue;
+        }
+
+        if let Some(title) = window.get(unsafe { kCGWindowName })
+            && let Ok(title) = title.downcast::<CFString>()
+        {
+            return Some(title.to_string());
+        }
+    }
+
+    None
 }
 
 pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {

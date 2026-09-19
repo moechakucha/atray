@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use iced::window;
 use iced::{Point, Size};
-use serde::{Deserialize, Serialize};
+use regex::Regex;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const TRAY_THICKNESS: f32 = 150.0;
 pub const TRAY_LENGTH: f32 = 430.0;
@@ -12,9 +13,11 @@ pub struct Config {
     #[serde(skip)]
     path: PathBuf,
     #[serde(default)]
-    pub preferences: Preferences,
+    pub drag: DragConfig,
     #[serde(default)]
     pub window: WindowConfig,
+    #[serde(default)]
+    pub advanced: AdvancedConfig,
 }
 
 impl Config {
@@ -54,20 +57,19 @@ impl Default for Config {
                 .join("atray")
                 .join("config.toml")
                 .to_path_buf(),
-            preferences: Preferences::default(),
+            advanced: AdvancedConfig::default(),
+            drag: DragConfig::default(),
             window: WindowConfig::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Preferences {
+pub struct AdvancedConfig {
     pub cache_dir: String,
-    pub move_modifier: crate::input::Modifier,
-    pub invert_copy_and_move: bool,
 }
 
-impl Default for Preferences {
+impl Default for AdvancedConfig {
     fn default() -> Self {
         Self {
             cache_dir: dirs::cache_dir()
@@ -75,10 +77,96 @@ impl Default for Preferences {
                 .join("atray")
                 .to_string_lossy()
                 .into_owned(),
-            move_modifier: crate::input::Modifier::Shift,
-            invert_copy_and_move: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DragConfig {
+    pub move_modifier: crate::input::Modifier,
+    pub invert_copy_and_move: bool,
+    #[serde(default)]
+    pub filter: Vec<FilterRule>,
+}
+
+impl DragConfig {
+    pub fn allows(&self, source: Option<&crate::platform::DragSource>) -> bool {
+        self.filter
+            .iter()
+            .find(|rule| rule.matches(source))
+            .is_none_or(|rule| rule.action == FilterAction::Allow)
+    }
+}
+
+impl Default for DragConfig {
+    fn default() -> Self {
+        Self {
+            move_modifier: crate::input::Modifier::Shift,
+            invert_copy_and_move: false,
+            filter: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilterRule {
+    #[serde(default)]
+    pub app: Option<Pattern>,
+    #[serde(default)]
+    pub title: Option<Pattern>,
+    #[serde(default)]
+    pub action: FilterAction,
+}
+
+impl FilterRule {
+    pub fn matches(&self, source: Option<&crate::platform::DragSource>) -> bool {
+        let app = source.and_then(|source| source.app_name.as_deref());
+        let title = source.and_then(|source| source.window_title.as_deref());
+
+        self.app.as_ref().is_none_or(|pattern| pattern.matches(app))
+            && self
+                .title
+                .as_ref()
+                .is_none_or(|pattern| pattern.matches(title))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Pattern(Regex);
+
+impl Pattern {
+    fn matches(&self, value: Option<&str>) -> bool {
+        value.is_some_and(|value| self.0.is_match(value))
+    }
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Serialize for Pattern {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Pattern {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let pattern = String::deserialize(deserializer)?;
+        Regex::new(&pattern)
+            .map(Pattern)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilterAction {
+    Allow,
+    #[default]
+    Deny,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -36,6 +36,17 @@ pub fn get_drag_handler() -> Box<dyn DragHandler> {
     todo!("implement a drag handler for this platform")
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DragSource {
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn drag_source() -> Option<DragSource> {
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIcon {
     pub width: u32,

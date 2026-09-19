@@ -356,7 +356,7 @@ impl App {
             None => (None, theme::Metrics::default()),
         };
 
-        let file_relay = load_cache(Path::new(&config.preferences.cache_dir));
+        let file_relay = load_cache(Path::new(&config.advanced.cache_dir));
 
         let mut app = Self {
             config,
@@ -505,11 +505,23 @@ impl App {
             return Task::none();
         }
 
+        if !self.source_allowed() {
+            return Task::none();
+        }
+
         self.open_tray()
     }
 
+    fn source_allowed(&self) -> bool {
+        self.config
+            .drag
+            .allows(crate::platform::drag_source().as_ref())
+    }
+
     fn tray_state(&self) -> TrayState {
-        if self.dragging.is_some() || self.drag_handler.is_dragging() || self.tray_hovered {
+        if self.dragging.is_some() || self.tray_hovered {
+            TrayState::Open
+        } else if self.drag_handler.is_dragging() && self.source_allowed() {
             TrayState::Open
         } else if self.file_relay.is_empty() {
             TrayState::Hidden
@@ -820,11 +832,14 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = input::modifiers()
-                    .contains(self.config.preferences.move_modifier)
-                    ^ self.config.preferences.invert_copy_and_move;
+                if !self.source_allowed() {
+                    return Task::none();
+                }
 
-                let cache_dir = self.config.preferences.cache_dir.clone();
+                let should_move = input::modifiers().contains(self.config.drag.move_modifier)
+                    ^ self.config.drag.invert_copy_and_move;
+
+                let cache_dir = self.config.advanced.cache_dir.clone();
                 let cache_path = if cache_dir.is_empty() {
                     None
                 } else {

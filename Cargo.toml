@@ -21,6 +21,7 @@ iced = { version = "0.14", features = ["advanced", "image"] }
 image = "0.25"
 native-theme-iced = "0.5"
 open = "5"
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 toml = "1"
@@ -40,6 +41,7 @@ rdev = { git = "https://github.com/Narsil/rdev.git", features = ["wayland", "x11
 block2 = "0.6"
 native-theme = { version = "0.5.8", features = ["macos"] }
 objc2 = "0.6"
+objc2-core-foundation = "0.3"
 objc2-core-graphics = { version = "0.3", features = [
     "CGEventSource",
     "CGEventTypes",
@@ -54,6 +56,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSEvent",
     "NSImage",
     "NSPasteboard",
+    "NSRunningApplication",
     "NSView",
     "NSWindow",
     "NSWorkspace",
