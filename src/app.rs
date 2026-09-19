@@ -614,10 +614,13 @@ impl App {
 
                 let should_move = crate::platform::modifiers().contains(Modifier::Alt);
 
-                let cache_path = PathBuf::from(self.config.preferences.cache_dir.clone());
-                if let Err(err) =
-                    self.add_from_location(path.clone(), Some(cache_path), should_move)
-                {
+                let cache_dir = self.config.preferences.cache_dir.clone();
+                let cache_path = if cache_dir.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(cache_dir))
+                };
+                if let Err(err) = self.add_from_location(path.clone(), cache_path, should_move) {
                     eprintln!("failed to add {path:?}: {err}");
                 }
 
