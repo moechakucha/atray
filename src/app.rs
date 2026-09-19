@@ -16,11 +16,37 @@ use iced::{
     alignment::{Horizontal, Vertical},
     window,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS};
 use crate::platform::{DragHandler, InputEvent, Modifier};
 use crate::theme;
 use crate::widget::FileChip;
+
+const CACHE_METADATA_SUFFIX: &str = ".atray.toml";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CacheMetadata {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    original: Option<PathBuf>,
+}
+
+impl CacheMetadata {
+    fn display_name(&self, path: &Path) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+
+        self.original
+            .as_ref()
+            .and_then(|original| original.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| file_name_of(path))
+    }
+}
 
 #[derive(Debug)]
 pub struct DeferredFile {
@@ -35,6 +61,15 @@ pub struct DeferredFile {
 enum Ownership {
     Referenced(PathBuf),
     Owned(OwnedPath),
+}
+
+impl Ownership {
+    fn path(&self) -> &PathBuf {
+        match self {
+            Ownership::Referenced(path) => path,
+            Ownership::Owned(owned_path) => owned_path.path(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -59,22 +94,28 @@ impl DeferredFile {
         should_move: bool,
     ) -> std::io::Result<Self> {
         let metadata = std::fs::metadata(&path)?;
-        let file_name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown file")
-            .to_string();
+        let file_name = file_name_of(&path);
 
         let original = path;
 
-        let icon = crate::platform::file_icon(&original, (theme::ICON_SIZE * 2.0).round() as u32)
-            .map(|icon| image::Handle::from_rgba(icon.width, icon.height, icon.rgba));
+        let icon = icon_for(&original);
 
         let ownership = if should_move {
             match cache_path {
                 Some(cache_path) => {
-                    let stored = cache_path.as_ref().join(&file_name);
+                    let cache_dir = cache_path.as_ref();
+                    std::fs::create_dir_all(cache_dir)?;
+
+                    let stored = unique_path(cache_dir, &file_name);
                     std::fs::copy(&original, &stored)?;
+                    write_metadata(
+                        &stored,
+                        &CacheMetadata {
+                            name: file_name_of(&stored),
+                            original: Some(original.clone()),
+                        },
+                    );
+
                     Ownership::Owned(OwnedPath::Configured(stored))
                 }
                 None => {
@@ -95,20 +136,138 @@ impl DeferredFile {
         }
 
         Ok(Self {
+            file_name: file_name_of(ownership.path()),
             ownership,
-            file_name,
             file_size: metadata.len(),
             last_modified: metadata.modified()?,
             icon,
         })
     }
 
-    pub fn path(&self) -> &PathBuf {
-        match &self.ownership {
-            Ownership::Referenced(path) => path,
-            Ownership::Owned(owned_path) => owned_path.path(),
+    fn from_cache(path: PathBuf, metadata: CacheMetadata) -> std::io::Result<Self> {
+        let file_metadata = std::fs::metadata(&path)?;
+        let icon = icon_for(&path);
+
+        Ok(Self {
+            file_name: metadata.display_name(&path),
+            ownership: Ownership::Owned(OwnedPath::Configured(path)),
+            file_size: file_metadata.len(),
+            last_modified: file_metadata.modified()?,
+            icon,
+        })
+    }
+
+    fn discard(&self) {
+        if let Ownership::Owned(OwnedPath::Configured(path)) = &self.ownership {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(metadata_path(path));
         }
     }
+
+    pub fn path(&self) -> &PathBuf {
+        self.ownership.path()
+    }
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown file")
+        .to_string()
+}
+
+fn icon_for(path: &Path) -> Option<image::Handle> {
+    crate::platform::file_icon(path, (theme::ICON_SIZE * 2.0).round() as u32)
+        .map(|icon| image::Handle::from_rgba(icon.width, icon.height, icon.rgba))
+}
+
+fn metadata_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(CACHE_METADATA_SUFFIX);
+
+    path.with_file_name(name)
+}
+
+fn is_metadata_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(CACHE_METADATA_SUFFIX))
+}
+
+fn write_metadata(path: &Path, metadata: &CacheMetadata) {
+    let content = match toml::to_string_pretty(metadata) {
+        Ok(content) => content,
+        Err(err) => {
+            eprintln!("failed to serialize cache metadata for {path:?}: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = std::fs::write(metadata_path(path), content) {
+        eprintln!("failed to write cache metadata for {path:?}: {err}");
+    }
+}
+
+fn read_metadata(path: &Path) -> Option<CacheMetadata> {
+    let content = std::fs::read_to_string(metadata_path(path)).ok()?;
+
+    toml::from_str(&content).ok()
+}
+
+fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
+    let mut candidate = dir.join(file_name);
+
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name);
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    let mut index = 2;
+
+    while candidate.exists() {
+        let name = match extension {
+            Some(extension) => format!("{stem} {index}.{extension}"),
+            None => format!("{stem} {index}"),
+        };
+
+        candidate = dir.join(name);
+        index += 1;
+    }
+
+    candidate
+}
+
+fn load_cache(cache_dir: &Path) -> Vec<DeferredFile> {
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return Vec::new();
+    };
+
+    let mut files: Vec<DeferredFile> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+
+            if !path.is_file() || is_metadata_path(&path) {
+                return None;
+            }
+
+            let metadata = read_metadata(&path)?;
+
+            DeferredFile::from_cache(path, metadata).ok()
+        })
+        .collect();
+
+    files.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+
+    files
 }
 
 #[derive(Clone)]
@@ -196,28 +355,35 @@ impl App {
             None => (None, theme::Metrics::default()),
         };
 
-        (
-            Self {
-                config,
-                file_relay: Vec::new(),
-                window_id: None,
-                drag_handler: crate::platform::get_drag_handler(),
-                dragging: None,
-                lingering: Vec::new(),
-                selected: HashSet::new(),
-                hovered: false,
-                theme,
-                metrics,
-                slide: None,
-                anchor: None,
-                position: Point::ORIGIN,
-                tray_hovered: false,
-                scroll_offset: 0.0,
-                tooltip_hover: None,
-                tooltip_window: None,
-            },
-            Task::none(),
-        )
+        let file_relay = load_cache(Path::new(&config.preferences.cache_dir));
+
+        let mut app = Self {
+            config,
+            file_relay,
+            window_id: None,
+            drag_handler: crate::platform::get_drag_handler(),
+            dragging: None,
+            lingering: Vec::new(),
+            selected: HashSet::new(),
+            hovered: false,
+            theme,
+            metrics,
+            slide: None,
+            anchor: None,
+            position: Point::ORIGIN,
+            tray_hovered: false,
+            scroll_offset: 0.0,
+            tooltip_hover: None,
+            tooltip_window: None,
+        };
+
+        let task = if app.file_relay.is_empty() {
+            Task::none()
+        } else {
+            app.open_tray()
+        };
+
+        (app, task)
     }
 
     pub fn theme(&self, _id: window::Id) -> Option<Theme> {
@@ -262,7 +428,7 @@ impl App {
             return false;
         }
 
-        self.lingering.clear();
+        self.discard_lingering();
         self.dragging = Some(indices);
 
         true
@@ -286,8 +452,8 @@ impl App {
         self.selected.clear();
     }
 
-    fn try_open_relay(&mut self) -> Task<Message> {
-        if self.window_id.is_some() || !self.drag_handler.is_dragging() {
+    fn open_tray(&mut self) -> Task<Message> {
+        if self.window_id.is_some() {
             return Task::none();
         }
 
@@ -298,6 +464,20 @@ impl App {
         self.scroll_offset = 0.0;
 
         task.discard()
+    }
+
+    fn discard_lingering(&mut self) {
+        for file in self.lingering.drain(..) {
+            file.discard();
+        }
+    }
+
+    fn try_open_relay(&mut self) -> Task<Message> {
+        if !self.drag_handler.is_dragging() {
+            return Task::none();
+        }
+
+        self.open_tray()
     }
 
     fn tray_state(&self) -> TrayState {
@@ -628,7 +808,10 @@ impl App {
             }
             Message::TrayMenuClicked(id) => {
                 return match id.as_str() {
-                    "quit" => iced::exit(),
+                    "quit" => {
+                        self.discard_lingering();
+                        iced::exit()
+                    }
                     "config_file" => {
                         open::that(&self.config.path()).ok();
                         Task::none()
