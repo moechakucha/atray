@@ -10,6 +10,7 @@ use crate::app::App;
 mod app;
 mod config;
 mod font;
+mod input;
 mod platform;
 mod theme;
 mod widget;
@@ -40,7 +41,7 @@ fn construct_menu(version: &str) -> anyhow::Result<Menu> {
 
 fn main() -> anyhow::Result<()> {
     platform::app_init()?;
-    platform::init_input();
+    input::init_input();
 
     let config_dir = dirs::config_dir()
         .context("failed to retrieve system config dir")?

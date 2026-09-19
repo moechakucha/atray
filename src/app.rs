@@ -19,7 +19,8 @@ use iced::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS};
-use crate::platform::{DragHandler, InputEvent, Modifier};
+use crate::input::{self, InputEvent};
+use crate::platform::DragHandler;
 use crate::theme;
 use crate::widget::FileChip;
 
@@ -819,7 +820,8 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = crate::platform::modifiers().contains(Modifier::Shift)
+                let should_move = input::modifiers()
+                    .contains(self.config.preferences.move_modifier)
                     ^ self.config.preferences.invert_copy_and_move;
 
                 let cache_dir = self.config.preferences.cache_dir.clone();
@@ -1073,7 +1075,7 @@ impl App {
             iced::stream::channel(100, move |output: mpsc::Sender<Message>| async move {
                 let output = std::sync::Mutex::new(output);
 
-                crate::platform::listen_input(Box::new(move |event| {
+                input::listen_input(Box::new(move |event| {
                     let message = match event {
                         InputEvent::PointerPressed => Message::PointerPressed,
                         InputEvent::PointerReleased => Message::PointerReleased,

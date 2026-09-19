@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use rdev::{Button, EventType, Key};
 
-use super::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
+use crate::input::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
 
 pub struct RdevInputHandler {
     pressed: Arc<Mutex<Modifiers>>,

@@ -19,6 +19,7 @@ use objc2_app_kit::{
     NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSImage,
     NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
 };
+
 use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
 use objc2_foundation::{
     NSArray, NSDate, NSError, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
@@ -28,9 +29,8 @@ use objc2_quick_look_thumbnailing::{
     QLThumbnailGenerator, QLThumbnailRepresentation,
 };
 
-use crate::platform::{
-    DragHandler, FileIcon, InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch,
-};
+use crate::input::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
+use crate::platform::{DragHandler, FileIcon};
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
 

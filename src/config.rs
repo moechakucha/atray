@@ -63,6 +63,7 @@ impl Default for Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preferences {
     pub cache_dir: String,
+    pub move_modifier: crate::input::Modifier,
     pub invert_copy_and_move: bool,
 }
 
@@ -74,6 +75,7 @@ impl Default for Preferences {
                 .join("atray")
                 .to_string_lossy()
                 .into_owned(),
+            move_modifier: crate::input::Modifier::Shift,
             invert_copy_and_move: false,
         }
     }
