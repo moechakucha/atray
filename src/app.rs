@@ -819,7 +819,8 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = crate::platform::modifiers().contains(Modifier::Alt);
+                let should_move = crate::platform::modifiers().contains(Modifier::Shift)
+                    ^ self.config.preferences.invert_copy_and_move;
 
                 let cache_dir = self.config.preferences.cache_dir.clone();
                 let cache_path = if cache_dir.is_empty() {
