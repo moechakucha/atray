@@ -8,12 +8,13 @@ edition = "2024"
 identifier = "moe.prwk.atray"
 icon = ["assets/icon.png", "assets/icon.icns"]
 category = "Utility"
-osx_minimum_system_version = "11.0"
+osx_minimum_system_version = "13.0"
 osx_info_plist_exts = ["assets/Info.plist.ext"]
 deb_depends = ["libc6", "libx11-6", "libxkbcommon0", "libwayland-client0"]
 
 [dependencies]
 anyhow = "1"
+auto-launch = "0.6"
 dark-light = "3"
 dirs = "7"
 findfont = "0.2"

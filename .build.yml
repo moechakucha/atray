@@ -23,8 +23,8 @@ packages:
 
 environment:
   TARGETS: aarch64-apple-darwin x86_64-apple-darwin
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
-  MACOS_SDK_URL: https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+  MACOS_SDK_URL: https://github.com/joseluisq/macosx-sdks/releases/download/13.3/MacOSX13.3.sdk.tar.xz
   OSXCROSS: /home/build/osxcross
   LIBDMG_HFSPLUS: /home/build/libdmg-hfsplus
 

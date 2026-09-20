@@ -2,8 +2,8 @@ use iced::advanced::image::Handle;
 use iced::advanced::text::Wrapping;
 use iced::alignment::Horizontal;
 use iced::widget::{
-    Column, button, checkbox, column, container, image, pick_list, row, rule, scrollable, space,
-    text, text_input,
+    Column, button, column, container, image, pick_list, row, rule, scrollable, space, text,
+    text_input, toggler,
 };
 use iced::{Alignment, ContentFit, Element, Length, Padding, window};
 
@@ -64,6 +64,7 @@ pub enum Message {
     Side(Side),
     Theme(ThemeMode),
     CacheDir(String),
+    LaunchAtLogin(bool),
     Revert,
     Save,
     OpenLink(&'static str),
@@ -123,6 +124,7 @@ pub struct Screen {
     side: Side,
     theme: ThemeMode,
     cache_dir: String,
+    launch_at_login: bool,
     error: Option<String>,
     icon: Option<Handle>,
 }
@@ -142,6 +144,7 @@ impl Screen {
             side: config.appearance.side,
             theme: config.appearance.theme,
             cache_dir: config.advanced.cache_dir.clone(),
+            launch_at_login: config.advanced.launch_at_login,
             error: None,
             icon: icon_handle(),
         }
@@ -160,6 +163,7 @@ impl Screen {
         config.appearance.side = self.side;
         config.appearance.theme = self.theme;
         config.advanced.cache_dir = self.cache_dir.trim().to_owned();
+        config.advanced.launch_at_login = self.launch_at_login;
 
         Ok(())
     }
@@ -197,6 +201,7 @@ impl Screen {
             Message::Side(side) => self.side = side,
             Message::Theme(theme) => self.theme = theme,
             Message::CacheDir(value) => self.cache_dir = value,
+            Message::LaunchAtLogin(enabled) => self.launch_at_login = enabled,
             Message::Revert | Message::Save => {}
             Message::OpenLink(url) => {
                 let _ = open::that(url);
@@ -314,7 +319,7 @@ impl Screen {
                     setting_row(
                         "Invert copy and move",
                         "Swap which action happens by default and which one needs the modifier.",
-                        checkbox(self.invert_copy_and_move)
+                        toggler(self.invert_copy_and_move)
                             .on_toggle(Message::InvertCopyAndMove)
                             .into(),
                         colors,
@@ -470,6 +475,18 @@ impl Screen {
                 "Leave empty to keep moved files in a temporary directory that is deleted \
                  when atray quits.",
                 colors,
+            ),
+            note("Startup", colors),
+            card(
+                vec![setting_row(
+                    "Launch at login",
+                    "Start the tray automatically when you log in.",
+                    toggler(self.launch_at_login)
+                        .on_toggle(Message::LaunchAtLogin)
+                        .into(),
+                    colors,
+                )],
+                metrics,
             ),
         ])
         .spacing(12)

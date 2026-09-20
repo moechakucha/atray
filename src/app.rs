@@ -18,6 +18,7 @@ use iced::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::autostart;
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS, screen};
 use crate::input::{self, InputEvent};
 use crate::platform::{DragHandler, WindowMaterial};
@@ -477,6 +478,8 @@ impl App {
             screen: None,
         };
 
+        app.read_autostart();
+
         let task = if app.file_relay.is_empty() {
             Task::none()
         } else {
@@ -918,6 +921,12 @@ impl App {
         self.refresh_theme();
         self.save_session();
 
+        if let Some(error) = self.apply_autostart()
+            && let Some(screen) = &mut self.screen
+        {
+            screen.set_error(error);
+        }
+
         if let Some(screen) = &mut self.screen {
             screen.clear_error();
         }
@@ -927,6 +936,28 @@ impl App {
         } else {
             Task::batch([self.materials(), self.restart_tray()])
         }
+    }
+
+    fn read_autostart(&mut self) {
+        let Ok(enabled) = autostart::is_enabled() else {
+            return;
+        };
+
+        if enabled == self.config.advanced.launch_at_login {
+            return;
+        }
+
+        self.config.advanced.launch_at_login = enabled;
+
+        if let Err(err) = self.config.save_to_original() {
+            eprintln!("failed to save config: {err}");
+        }
+    }
+
+    fn apply_autostart(&self) -> Option<String> {
+        autostart::set(self.config.advanced.launch_at_login)
+            .err()
+            .map(|err| format!("failed to update launch at login: {err}"))
     }
 
     fn screen_message(&mut self, message: screen::Message) -> Task<Message> {
@@ -1164,6 +1195,10 @@ impl App {
 
                         self.refresh_theme();
                         self.save_session();
+
+                        if let Some(error) = self.apply_autostart() {
+                            eprintln!("{error}");
+                        }
 
                         if self.config.appearance.side == previous_side {
                             Task::none()

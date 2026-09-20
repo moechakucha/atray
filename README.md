@@ -5,11 +5,13 @@
 
 [![builds.sr.ht status](https://builds.sr.ht/~flamarine/atray/commits/trunk.svg)](https://builds.sr.ht/~flamarine/atray/commits/trunk?)
 
-~~i probably should add an 's'~~
-
 Simple file relay tray; cross-platform alternative to [Yoink](https://eternalstorms.at/yoink/mac/).
 
-Based on [Iced](https://github.com/iced-rs/iced).
+## Platform support
+
+Note that currently we only have implementation for macOS. Windows and Linux support is planned.
+
+* **macOS**: 13.0+
 
 ## License
 

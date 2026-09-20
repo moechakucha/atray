@@ -8,6 +8,7 @@ use tray_icon::{
 use crate::app::App;
 
 mod app;
+mod autostart;
 mod config;
 mod font;
 mod input;

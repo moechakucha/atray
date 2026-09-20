@@ -67,6 +67,8 @@ impl Default for Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedConfig {
     pub cache_dir: String,
+    #[serde(default)]
+    pub launch_at_login: bool,
 }
 
 impl Default for AdvancedConfig {
@@ -77,6 +79,7 @@ impl Default for AdvancedConfig {
                 .join("atray")
                 .to_string_lossy()
                 .into_owned(),
+            launch_at_login: false,
         }
     }
 }
