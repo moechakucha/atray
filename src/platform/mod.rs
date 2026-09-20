@@ -18,6 +18,12 @@ mod rdev_input;
 #[cfg(not(target_os = "macos"))]
 pub use rdev_input::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragEffect {
+    Copy,
+    Move,
+}
+
 pub trait DragHandler {
     fn new() -> Self
     where
@@ -25,7 +31,7 @@ pub trait DragHandler {
 
     fn is_dragging(&self) -> bool;
 
-    fn start_drag(&self, paths: &[PathBuf]) -> bool;
+    fn start_drag(&self, paths: &[PathBuf], effect: DragEffect) -> bool;
 
     fn cancel_pending_drag(&self);
 

@@ -22,7 +22,7 @@ use crate::autostart;
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS, screen};
 use crate::i18n;
 use crate::input::{self, InputEvent};
-use crate::platform::{DragHandler, WindowMaterial};
+use crate::platform::{DragEffect, DragHandler, WindowMaterial};
 use crate::theme;
 use crate::tray;
 use crate::widget::FileChip;
@@ -584,6 +584,11 @@ impl App {
         write_session(self.config.path(), &files);
     }
 
+    fn should_move(&self) -> bool {
+        input::modifiers().contains(self.config.behavior.move_modifier)
+            ^ self.config.behavior.invert_copy_and_move
+    }
+
     pub fn take_out(&mut self, index: usize) -> bool {
         if index >= self.file_relay.len() {
             return false;
@@ -613,7 +618,13 @@ impl App {
             .map(|&i| self.file_relay[i].path().clone())
             .collect();
 
-        if !self.drag_handler.start_drag(&paths) {
+        let effect = if self.should_move() {
+            DragEffect::Move
+        } else {
+            DragEffect::Copy
+        };
+
+        if !self.drag_handler.start_drag(&paths, effect) {
             return false;
         }
 
@@ -1184,8 +1195,7 @@ impl App {
                     return Task::none();
                 }
 
-                let should_move = input::modifiers().contains(self.config.behavior.move_modifier)
-                    ^ self.config.behavior.invert_copy_and_move;
+                let should_move = self.should_move();
 
                 let cache_dir = self.config.advanced.cache_dir.clone();
                 let cache_path = if cache_dir.is_empty() {

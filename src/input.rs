@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 use crate::platform::MacosInputHandler;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+use crate::platform::WindowsInputHandler;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use crate::platform::RdevInputHandler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -58,7 +61,10 @@ fn input_handler() -> &'static dyn InputHandler {
         #[cfg(target_os = "macos")]
         let handler: Box<dyn InputHandler> = Box::new(MacosInputHandler::init());
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        let handler: Box<dyn InputHandler> = Box::new(WindowsInputHandler::init());
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let handler: Box<dyn InputHandler> = Box::new(RdevInputHandler::init());
 
         handler

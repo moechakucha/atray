@@ -38,18 +38,19 @@ use objc2_quick_look_thumbnailing::{
 use raw_window_handle::RawWindowHandle;
 
 use crate::input::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
-use crate::platform::{DragHandler, DragSource, FileIcon, WindowMaterial};
+use crate::platform::{DragEffect, DragHandler, DragSource, FileIcon, WindowMaterial};
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
 
 struct DragSourceIvars {
     result: Arc<Mutex<Option<bool>>>,
+    effect: DragEffect,
 }
 
 #[derive(Clone)]
 pub struct MacosDragHandler {
     is_dragging: Arc<AtomicBool>,
-    pending: Arc<Mutex<Option<Vec<PathBuf>>>>,
+    pending: Arc<Mutex<Option<(Vec<PathBuf>, DragEffect)>>>,
     result: Arc<Mutex<Option<bool>>>,
     source: Arc<Mutex<Option<DragSourceHandle>>>,
 }
@@ -71,7 +72,10 @@ define_class!(
             _session: &NSDraggingSession,
             _context: NSDraggingContext,
         ) -> NSDragOperation {
-            NSDragOperation::Copy
+            match self.ivars().effect {
+                DragEffect::Copy => NSDragOperation::Copy,
+                DragEffect::Move => NSDragOperation::Move,
+            }
         }
 
         #[unsafe(method(draggingSession:willBeginAtPoint:))]
@@ -98,8 +102,12 @@ define_class!(
 );
 
 impl AtrayDragSource {
-    fn new(mtm: MainThreadMarker, result: Arc<Mutex<Option<bool>>>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(DragSourceIvars { result });
+    fn new(
+        mtm: MainThreadMarker,
+        result: Arc<Mutex<Option<bool>>>,
+        effect: DragEffect,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(DragSourceIvars { result, effect });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -107,7 +115,7 @@ impl AtrayDragSource {
 impl MacosDragHandler {
     pub fn init() -> Self {
         let is_dragging = Arc::new(AtomicBool::new(false));
-        let pending: Arc<Mutex<Option<Vec<PathBuf>>>> = Arc::new(Mutex::new(None));
+        let pending: Arc<Mutex<Option<(Vec<PathBuf>, DragEffect)>>> = Arc::new(Mutex::new(None));
         let result: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let source: Arc<Mutex<Option<DragSourceHandle>>> = Arc::new(Mutex::new(None));
 
@@ -151,10 +159,11 @@ impl MacosDragHandler {
             NSEvent::addLocalMonitorForEventsMatchingMask_handler(
                 NSEventMask::LeftMouseDragged,
                 &RcBlock::new(move |event: NonNull<NSEvent>| {
-                    if let Some(paths) = pending_for_monitor.lock().unwrap().take() {
+                    if let Some((paths, effect)) = pending_for_monitor.lock().unwrap().take() {
                         begin_drag(
                             event.as_ref(),
                             &paths,
+                            effect,
                             &result_for_monitor,
                             &source_for_monitor,
                         );
@@ -214,12 +223,12 @@ impl DragHandler for MacosDragHandler {
         MacosDragHandler::is_dragging(self)
     }
 
-    fn start_drag(&self, paths: &[PathBuf]) -> bool {
+    fn start_drag(&self, paths: &[PathBuf], effect: DragEffect) -> bool {
         if paths.is_empty() {
             return false;
         }
 
-        *self.pending.lock().unwrap() = Some(paths.to_vec());
+        *self.pending.lock().unwrap() = Some((paths.to_vec(), effect));
         true
     }
 
@@ -235,6 +244,7 @@ impl DragHandler for MacosDragHandler {
 fn begin_drag(
     event: &NSEvent,
     paths: &[PathBuf],
+    effect: DragEffect,
     result: &Arc<Mutex<Option<bool>>>,
     source_slot: &Arc<Mutex<Option<DragSourceHandle>>>,
 ) {
@@ -274,7 +284,7 @@ fn begin_drag(
     }
 
     let items = NSArray::from_retained_slice(&items);
-    let source = AtrayDragSource::new(mtm, Arc::clone(result));
+    let source = AtrayDragSource::new(mtm, Arc::clone(result), effect);
     let source: DragSourceHandle = ProtocolObject::from_retained(source);
 
     window.beginDraggingSessionWithItems_event_source(&items, event, &source);
