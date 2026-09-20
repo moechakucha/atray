@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path, path::PathBuf};
+use std::{env, fs, io::Cursor, path::Path, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -23,6 +23,10 @@ fn main() -> Result<()> {
             let dmg = build_dmg(&sh, &metadata, &args, &app)?;
             println!("{}", dmg.display());
         }
+        Task::Msi => {
+            let msi = build_msi(&sh, &root, &metadata, &args)?;
+            println!("{}", msi.display());
+        }
     }
 
     Ok(())
@@ -32,6 +36,7 @@ fn main() -> Result<()> {
 enum Task {
     Bundle,
     Dmg,
+    Msi,
 }
 
 #[derive(Debug)]
@@ -40,6 +45,7 @@ struct Args {
     target: Option<String>,
     release: bool,
     sign: bool,
+    build: bool,
     out: PathBuf,
 }
 
@@ -49,6 +55,7 @@ impl Args {
         let mut target = None;
         let mut release = true;
         let mut sign = true;
+        let mut build = true;
         let mut out = PathBuf::from("dist");
 
         let mut args = env::args().skip(1);
@@ -57,9 +64,11 @@ impl Args {
             match arg.as_str() {
                 "bundle" => task = Some(Task::Bundle),
                 "dmg" => task = Some(Task::Dmg),
+                "msi" => task = Some(Task::Msi),
                 "--target" => target = Some(args.next().context("--target needs a triple")?),
                 "--debug" => release = false,
                 "--no-sign" => sign = false,
+                "--no-build" => build = false,
                 "--out" => out = PathBuf::from(args.next().context("--out needs a path")?),
                 "-h" | "--help" => {
                     print_help();
@@ -70,10 +79,11 @@ impl Args {
         }
 
         Ok(Self {
-            task: task.context("expected `bundle` or `dmg`")?,
+            task: task.context("expected `bundle`, `dmg` or `msi`")?,
             target,
             release,
             sign,
+            build,
             out,
         })
     }
@@ -82,7 +92,11 @@ impl Args {
         if self.release { "release" } else { "debug" }
     }
 
-    fn target(&self) -> Result<Option<&str>> {
+    fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    fn macos_target(&self) -> Result<Option<&str>> {
         let Some(target) = self.target.as_deref() else {
             if env::consts::OS != "macos" {
                 bail!(
@@ -101,6 +115,18 @@ impl Args {
         Ok(Some(target))
     }
 
+    fn windows_target(&self) -> Result<&str> {
+        let Some(target) = self.target.as_deref() else {
+            bail!("no --target given; pass e.g. --target x86_64-pc-windows-gnu");
+        };
+
+        if !target.contains("windows") {
+            bail!("{target} is not a Windows target (expected *-pc-windows-*)");
+        }
+
+        Ok(target)
+    }
+
     fn arch(&self) -> String {
         match self.target.as_deref() {
             Some(target) => target.split('-').next().unwrap_or(target).to_owned(),
@@ -112,7 +138,8 @@ impl Args {
 fn print_help() {
     println!(
         "cargo xtask bundle [--target <triple>] [--debug] [--no-sign] [--out <dir>]\n\
-         cargo xtask dmg    [--target <triple>] [--debug] [--no-sign] [--out <dir>]"
+         cargo xtask dmg    [--target <triple>] [--debug] [--no-sign] [--out <dir>]\n\
+         cargo xtask msi    [--target <triple>] [--debug] [--no-build] [--out <dir>]"
     );
 }
 
@@ -226,12 +253,16 @@ impl Metadata {
     fn bundle_name(&self) -> &str {
         self.bundle.name.as_deref().unwrap_or(&self.name)
     }
+
+    fn identifier(&self) -> &str {
+        self.bundle.identifier.as_deref().unwrap_or(&self.name)
+    }
 }
 
 fn build_app(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Result<PathBuf> {
-    let target = args.target()?;
+    let target = args.macos_target()?;
 
-    build_binary(sh, args, target)?;
+    build_binary(sh, args, target, &metadata.binary)?;
 
     let binary = binary_path(args, metadata)?;
     let app = args.out.join(format!("{}.app", metadata.bundle_name()));
@@ -277,7 +308,7 @@ fn build_app(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Resul
     Ok(app)
 }
 
-fn build_binary(sh: &Shell, args: &Args, target: Option<&str>) -> Result<()> {
+fn build_binary(sh: &Shell, args: &Args, target: Option<&str>, binary: &str) -> Result<()> {
     let mut cargo = sh.cmd("cargo").arg("build");
 
     if args.release {
@@ -287,6 +318,8 @@ fn build_binary(sh: &Shell, args: &Args, target: Option<&str>) -> Result<()> {
     if let Some(target) = target {
         cargo = cargo.arg("--target").arg(target);
     }
+
+    cargo = cargo.arg("--bin").arg(binary);
 
     cargo.run().context("cargo build failed")?;
 
@@ -302,7 +335,16 @@ fn binary_path(args: &Args, metadata: &Metadata) -> Result<PathBuf> {
 
     dir.push(args.profile());
 
-    let binary = dir.join(&metadata.binary);
+    let name = if args
+        .target()
+        .is_some_and(|target| target.contains("windows"))
+    {
+        format!("{}.exe", metadata.binary)
+    } else {
+        metadata.binary.clone()
+    };
+
+    let binary = dir.join(name);
 
     if !binary.is_file() {
         bail!("expected a built binary at {}", binary.display());
@@ -428,6 +470,7 @@ fn escape(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn category_type(category: &str) -> Option<String> {
@@ -569,6 +612,239 @@ fn tool_from_env(variable: &str, default: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(default))
 }
+
+fn build_msi(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Result<PathBuf> {
+    let target = args.windows_target()?;
+
+    if args.build {
+        build_binary(sh, args, Some(target), &metadata.binary)?;
+    } else {
+        binary_path(args, metadata)?;
+    }
+
+    fs::create_dir_all(&args.out)?;
+
+    let binary = binary_path(args, metadata)?;
+    let name = metadata.bundle_name();
+    let msi = args.out.join(format!("{name}-{}.msi", args.arch()));
+    let manifest = args.out.join(format!("{name}-{}.wxs", args.arch()));
+
+    if msi.exists() {
+        fs::remove_file(&msi).with_context(|| format!("failed to clear {msi:?}"))?;
+    }
+
+    let icon = windows_icon(root, metadata, &args.out)?;
+    let source = wxs_source(root, metadata, &binary, args.arch(), icon.as_deref());
+
+    fs::write(&manifest, source).with_context(|| format!("failed to write {manifest:?}"))?;
+
+    wixl(sh, &manifest, &msi, wixl_arch(target))?;
+
+    Ok(msi)
+}
+
+fn windows_icon(root: &Path, metadata: &Metadata, out: &Path) -> Result<Option<PathBuf>> {
+    let Some(icon) = metadata
+        .bundle
+        .icon
+        .iter()
+        .find(|icon| icon.ends_with(".png"))
+    else {
+        return Ok(None);
+    };
+
+    let source = root.join(icon);
+    let image = image::open(&source)
+        .with_context(|| format!("failed to open {}", source.display()))?
+        .into_rgba8();
+    let image = image::imageops::resize(
+        &image,
+        WINDOWS_ICON_SIZE,
+        WINDOWS_ICON_SIZE,
+        image::imageops::FilterType::Lanczos3,
+    );
+
+    let mut png = Vec::new();
+
+    image
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .context("failed to encode the icon as PNG")?;
+
+    let icon = out.join(format!("{}.ico", metadata.bundle_name()));
+    let mut bytes = Vec::with_capacity(png.len() + 22);
+
+    bytes.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&32u16.to_le_bytes());
+    bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&22u32.to_le_bytes());
+    bytes.extend_from_slice(&png);
+
+    fs::write(&icon, bytes).with_context(|| format!("failed to write {icon:?}"))?;
+
+    Ok(Some(icon))
+}
+
+fn wxs_source(
+    root: &Path,
+    metadata: &Metadata,
+    binary: &Path,
+    arch: String,
+    icon: Option<&Path>,
+) -> String {
+    let identifier = metadata.identifier();
+    let name = escape(metadata.bundle_name());
+    let version = escape(&metadata.version);
+    let manufacturer = escape(&manufacturer(identifier));
+    let upgrade = stable_guid(&format!("{identifier} upgrade"));
+    let product = stable_guid(&format!("{identifier} {version} {arch} product"));
+    let package = stable_guid(&format!("{identifier} {version} {arch} package"));
+    let component = stable_guid(&format!("{identifier} {arch} executable component"));
+    let file = binary
+        .file_name()
+        .map(|file| file.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{}.exe", metadata.binary));
+    let source = escape(&relative(root, binary));
+
+    let mut wxs = String::new();
+
+    wxs.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    wxs.push_str("<Wix xmlns=\"http://schemas.microsoft.com/wix/2006/wi\">\n");
+    wxs.push_str(&format!(
+        "  <Product Id=\"{product}\" Name=\"{name}\" Language=\"1033\" Version=\"{version}\" \
+         Manufacturer=\"{manufacturer}\" UpgradeCode=\"{upgrade}\">\n"
+    ));
+    wxs.push_str(&format!(
+        "    <Package Id=\"{package}\" Keywords=\"Installer\" Description=\"{name} {version}\" \
+         Manufacturer=\"{manufacturer}\" InstallerVersion=\"500\" Compressed=\"yes\" />\n"
+    ));
+    wxs.push_str(&format!(
+        "    <MajorUpgrade DowngradeErrorMessage=\"A newer version of {name} is already installed.\" />\n"
+    ));
+    wxs.push_str("    <Property Id=\"ALLUSERS\" Value=\"1\" />\n");
+    wxs.push_str("    <Property Id=\"ARPNOMODIFY\" Value=\"1\" />\n");
+    wxs.push_str(&format!(
+        "    <Media Id=\"1\" Cabinet=\"{identifier}.cab\" EmbedCab=\"yes\" />\n"
+    ));
+
+    if let Some(icon) = icon {
+        wxs.push_str(&format!(
+            "    <Icon Id=\"AtrayIcon\" SourceFile=\"{}\" />\n",
+            escape(&relative(root, icon))
+        ));
+        wxs.push_str("    <Property Id=\"ARPPRODUCTICON\" Value=\"AtrayIcon\" />\n");
+    }
+
+    wxs.push_str("    <Directory Id=\"TARGETDIR\" Name=\"SourceDir\">\n");
+    wxs.push_str("      <Directory Id=\"ProgramFiles64Folder\">\n");
+    wxs.push_str(&format!(
+        "        <Directory Id=\"INSTALLFOLDER\" Name=\"{name}\">\n"
+    ));
+    wxs.push_str(&format!(
+        "          <Component Id=\"AtrayExecutable\" Guid=\"{component}\" Win64=\"yes\">\n"
+    ));
+    wxs.push_str(&format!(
+        "            <File Id=\"AtrayExecutableFile\" Name=\"{file}\" Source=\"{source}\" \
+         KeyPath=\"yes\" />\n"
+    ));
+    wxs.push_str(&format!(
+        "            <Shortcut Id=\"AtrayStartMenu\" Directory=\"ProgramMenuFolder\" Name=\"{name}\" \
+         WorkingDirectory=\"INSTALLFOLDER\" Advertise=\"no\" />\n"
+    ));
+    wxs.push_str("          </Component>\n");
+    wxs.push_str("        </Directory>\n");
+    wxs.push_str("      </Directory>\n");
+    wxs.push_str("      <Directory Id=\"ProgramMenuFolder\" />\n");
+    wxs.push_str("    </Directory>\n");
+    wxs.push_str(&format!(
+        "    <Feature Id=\"Complete\" Title=\"{name}\" Level=\"1\">\n"
+    ));
+    wxs.push_str("      <ComponentRef Id=\"AtrayExecutable\" />\n");
+    wxs.push_str("    </Feature>\n");
+    wxs.push_str("  </Product>\n");
+    wxs.push_str("</Wix>\n");
+
+    wxs
+}
+
+fn wixl(sh: &Shell, manifest: &Path, msi: &Path, arch: &str) -> Result<()> {
+    let tool = tool_from_env("WIXL", "wixl");
+
+    sh.cmd(&tool)
+        .arg("--arch")
+        .arg(arch)
+        .arg("-o")
+        .arg(msi)
+        .arg(manifest)
+        .run()
+        .with_context(|| {
+            format!(
+                "failed to run {} (install msitools or set WIXL)",
+                tool.display()
+            )
+        })?;
+
+    Ok(())
+}
+
+fn wixl_arch(target: &str) -> &'static str {
+    match target.split('-').next() {
+        Some("i586" | "i686") => "x86",
+        Some("aarch64") => "arm64",
+        _ => "x64",
+    }
+}
+
+fn stable_guid(seed: &str) -> String {
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+
+    let mut hash = OFFSET;
+
+    for byte in seed.bytes() {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+
+    let bytes = hash.to_be_bytes();
+
+    format!(
+        "{{{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
+    )
+}
+
+fn manufacturer(identifier: &str) -> String {
+    match identifier.rsplit_once('.') {
+        Some((prefix, _)) => prefix.to_owned(),
+        None => identifier.to_owned(),
+    }
+}
+
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+const WINDOWS_ICON_SIZE: u32 = 256;
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;

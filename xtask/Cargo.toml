@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 apple-codesign = "0.29"
+image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
