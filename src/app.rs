@@ -25,6 +25,26 @@ use crate::theme;
 use crate::widget::FileChip;
 
 const CACHE_METADATA_SUFFIX: &str = ".atray.toml";
+const CACHE_SESSION_FILE: &str = ".session.toml";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SessionKind {
+    Referenced,
+    Owned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionEntry {
+    kind: SessionKind,
+    path: PathBuf,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CacheSession {
+    #[serde(default)]
+    files: Vec<SessionEntry>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheMetadata {
@@ -165,6 +185,10 @@ impl DeferredFile {
         }
     }
 
+    fn exists(&self) -> bool {
+        self.path().exists()
+    }
+
     pub fn path(&self) -> &PathBuf {
         self.ownership.path()
     }
@@ -192,10 +216,18 @@ fn metadata_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn is_metadata_path(path: &Path) -> bool {
-    path.file_name()
+fn is_metadata_path(path: &Path, entries: &[PathBuf]) -> bool {
+    let Some(annotated) = path
+        .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(CACHE_METADATA_SUFFIX))
+        .and_then(|name| name.strip_suffix(CACHE_METADATA_SUFFIX))
+    else {
+        return false;
+    };
+
+    entries
+        .iter()
+        .any(|entry| entry.as_path() == path.with_file_name(annotated))
 }
 
 fn write_metadata(path: &Path, metadata: &CacheMetadata) {
@@ -216,6 +248,64 @@ fn read_metadata(path: &Path) -> Option<CacheMetadata> {
     let content = std::fs::read_to_string(metadata_path(path)).ok()?;
 
     toml::from_str(&content).ok()
+}
+
+fn session_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name(CACHE_SESSION_FILE)
+}
+
+fn read_session(config_path: &Path) -> Vec<SessionEntry> {
+    let Ok(content) = std::fs::read_to_string(session_path(config_path)) else {
+        return Vec::new();
+    };
+
+    toml::from_str::<CacheSession>(&content)
+        .map(|session| session.files)
+        .unwrap_or_default()
+}
+
+fn write_session(config_path: &Path, files: &[SessionEntry]) {
+    let content = match toml::to_string_pretty(&CacheSession {
+        files: files.to_vec(),
+    }) {
+        Ok(content) => content,
+        Err(err) => {
+            eprintln!("failed to serialize session: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = std::fs::write(session_path(config_path), content) {
+        eprintln!("failed to write session: {err}");
+    }
+}
+
+fn load_session(config_path: &Path, cache_dir: &Path) -> Vec<DeferredFile> {
+    let mut files: Vec<DeferredFile> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    for entry in read_session(config_path) {
+        let file = match entry.kind {
+            SessionKind::Owned => read_metadata(&entry.path)
+                .and_then(|metadata| DeferredFile::from_cache(entry.path.clone(), metadata).ok()),
+            SessionKind::Referenced => {
+                DeferredFile::new(entry.path.clone(), None::<&Path>, false).ok()
+            }
+        };
+
+        if let Some(file) = file {
+            seen.insert(entry.path);
+            files.push(file);
+        }
+    }
+
+    for file in load_cache(cache_dir) {
+        if seen.insert(file.path().clone()) {
+            files.push(file);
+        }
+    }
+
+    files
 }
 
 fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
@@ -251,18 +341,19 @@ fn load_cache(cache_dir: &Path) -> Vec<DeferredFile> {
         return Vec::new();
     };
 
-    let mut files: Vec<DeferredFile> = entries
+    let paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
 
-            if !path.is_file() || is_metadata_path(&path) {
-                return None;
-            }
+    let mut files: Vec<DeferredFile> = paths
+        .iter()
+        .filter(|path| !is_metadata_path(path, &paths))
+        .filter_map(|path| {
+            let metadata = read_metadata(path)?;
 
-            let metadata = read_metadata(&path)?;
-
-            DeferredFile::from_cache(path, metadata).ok()
+            DeferredFile::from_cache(path.clone(), metadata).ok()
         })
         .collect();
 
@@ -298,7 +389,6 @@ pub enum Message {
     TooltipTick,
     SlideTick(Instant),
     Screen(screen::Message),
-    MaterialApplied,
     WindowCloseRequested(window::Id),
     WindowClosed(window::Id),
     Placeholder,
@@ -362,7 +452,7 @@ impl App {
         let system_mode = detected_system_mode();
         let (theme, metrics) = theme::resolve(config.appearance.theme, system_mode);
 
-        let file_relay = load_cache(Path::new(&config.advanced.cache_dir));
+        let file_relay = load_session(config.path(), Path::new(&config.advanced.cache_dir));
 
         let mut app = Self {
             config,
@@ -430,7 +520,7 @@ impl App {
             .is_some_and(|theme| theme.extended_palette().is_dark);
 
         crate::platform::apply_window_material(window, material, radius, dark)
-            .map(|()| Message::MaterialApplied)
+            .map(|()| Message::Placeholder)
     }
 
     fn materials(&self) -> Task<Message> {
@@ -448,7 +538,40 @@ impl App {
     ) -> std::io::Result<()> {
         let file = DeferredFile::new(path, cache_path.as_ref(), should_move)?;
         self.file_relay.push(file);
+        self.save_session();
         Ok(())
+    }
+
+    fn save_session(&self) {
+        let files: Vec<SessionEntry> = self
+            .file_relay
+            .iter()
+            .filter_map(|file| {
+                let entry = match &file.ownership {
+                    Ownership::Referenced(path) => Some(SessionEntry {
+                        kind: SessionKind::Referenced,
+                        path: path.clone(),
+                    }),
+                    Ownership::Owned(OwnedPath::Configured(path)) => Some(SessionEntry {
+                        kind: SessionKind::Owned,
+                        path: path.clone(),
+                    }),
+                    Ownership::Owned(OwnedPath::Temp(..)) => None,
+                }?;
+
+                if entry.path.to_str().is_none() {
+                    eprintln!(
+                        "session: skipping {} because its path is not valid UTF-8",
+                        entry.path.display()
+                    );
+                    return None;
+                }
+
+                Some(entry)
+            })
+            .collect();
+
+        write_session(self.config.path(), &files);
     }
 
     pub fn take_out(&mut self, index: usize) -> bool {
@@ -469,6 +592,12 @@ impl App {
         indices.sort_unstable();
         indices.dedup();
 
+        self.prune_missing(&mut indices);
+
+        if indices.is_empty() {
+            return false;
+        }
+
         let paths: Vec<PathBuf> = indices
             .iter()
             .map(|&i| self.file_relay[i].path().clone())
@@ -482,6 +611,36 @@ impl App {
         self.dragging = Some(indices);
 
         true
+    }
+
+    fn prune_missing(&mut self, indices: &mut Vec<usize>) {
+        let len = self.file_relay.len();
+        let missing: Vec<usize> = (0..len)
+            .filter(|&index| !self.file_relay[index].exists())
+            .collect();
+
+        if missing.is_empty() {
+            return;
+        }
+
+        let shift =
+            |index: usize| index - missing.iter().filter(|&&removed| removed < index).count();
+
+        for &index in missing.iter().rev() {
+            self.file_relay.remove(index).discard();
+        }
+
+        indices.retain(|index| !missing.contains(index));
+        *indices = indices.iter().map(|&index| shift(index)).collect();
+
+        self.selected = self
+            .selected
+            .iter()
+            .filter(|index| **index < len && !missing.contains(index))
+            .map(|&index| shift(index))
+            .collect();
+
+        self.save_session();
     }
 
     fn finish_drag(&mut self, success: bool) {
@@ -500,6 +659,7 @@ impl App {
         }
 
         self.selected.clear();
+        self.save_session();
     }
 
     fn open_tray(&mut self) -> Task<Message> {
@@ -756,6 +916,7 @@ impl App {
         let previous_side = self.config.appearance.side;
         self.config = config;
         self.refresh_theme();
+        self.save_session();
 
         if let Some(screen) = &mut self.screen {
             screen.clear_error();
@@ -950,6 +1111,7 @@ impl App {
 
                 if let Some(index) = self.lingering.iter().position(|file| file.path() == &path) {
                     self.file_relay.push(self.lingering.remove(index));
+                    self.save_session();
                     return Task::none();
                 }
 
@@ -1001,6 +1163,7 @@ impl App {
                         self.config = config::Config::load(self.config.path()).unwrap_or_default();
 
                         self.refresh_theme();
+                        self.save_session();
 
                         if self.config.appearance.side == previous_side {
                             Task::none()
@@ -1018,7 +1181,6 @@ impl App {
 
                 self.materials()
             }
-            Message::MaterialApplied => Task::none(),
             Message::RelayOpened(id) => {
                 if self.tooltip_window == Some(id) {
                     return window::enable_mouse_passthrough(id);
