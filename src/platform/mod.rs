@@ -57,6 +57,11 @@ pub fn window_radius() -> f32 {
     0.0
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn preferred_languages() -> Vec<String> {
+    Vec::new()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIcon {
     pub width: u32,

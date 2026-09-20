@@ -29,7 +29,7 @@ use objc2_core_graphics::{
     CGWindowListOption, kCGNullWindowID, kCGWindowLayer, kCGWindowName, kCGWindowOwnerName,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSError, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
+    NSArray, NSDate, NSError, NSLocale, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
 };
 use objc2_quick_look_thumbnailing::{
     QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
@@ -321,6 +321,13 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
 
 pub fn titlebar_inset() -> f32 {
     28.0
+}
+
+pub fn preferred_languages() -> Vec<String> {
+    NSLocale::preferredLanguages()
+        .iter()
+        .map(|language| language.to_string())
+        .collect()
 }
 
 pub fn window_radius() -> f32 {

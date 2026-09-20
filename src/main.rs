@@ -1,9 +1,5 @@
 use anyhow::Context;
 use iced::Color;
-use tray_icon::{
-    Icon,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-};
 
 use crate::app::App;
 
@@ -11,37 +7,12 @@ mod app;
 mod autostart;
 mod config;
 mod font;
+mod i18n;
 mod input;
 mod platform;
 mod theme;
+mod tray;
 mod widget;
-
-fn load_icon(bytes: &[u8]) -> anyhow::Result<Icon> {
-    let image = image::load_from_memory(bytes)?.into_rgba8();
-    let (width, height) = image.dimensions();
-    let rgba = image.into_raw();
-    Ok(Icon::from_rgba(rgba, width, height)?)
-}
-
-fn construct_menu(version: &str) -> anyhow::Result<Menu> {
-    let version_label = MenuItem::new(format!("Version {version}"), false, None);
-    let settings_button = MenuItem::with_id("settings", "Settings...", true, None);
-    let config_file_button = MenuItem::with_id("config_file", "Open Config File", true, None);
-    let reload_config_file_button =
-        MenuItem::with_id("reload_config_file", "Reload Config File", true, None);
-    let quit_button = MenuItem::with_id("quit", "Quit", true, None);
-
-    Ok(Menu::with_items(&[
-        &version_label,
-        &PredefinedMenuItem::separator(),
-        &settings_button,
-        &PredefinedMenuItem::separator(),
-        &config_file_button,
-        &reload_config_file_button,
-        &PredefinedMenuItem::separator(),
-        &quit_button,
-    ])?)
-}
 
 fn main() -> anyhow::Result<()> {
     platform::app_init()?;
@@ -58,18 +29,9 @@ fn main() -> anyhow::Result<()> {
     let config = config::Config::load(&config_path)?;
     config.save_to_original()?;
 
-    let version = env!("CARGO_PKG_VERSION");
-    let tray_icon_bytes = include_bytes!("../assets/tray_icon.png");
+    i18n::init(config.appearance.language.as_deref());
 
-    let menu = construct_menu(&version)?;
-
-    let _tray_icon = tray_icon::TrayIconBuilder::new()
-        .with_icon(load_icon(tray_icon_bytes)?)
-        .with_icon_as_template(true)
-        .with_tooltip("atray")
-        .with_menu(Box::new(menu))
-        .build()
-        .context("failed to build tray icon")?;
+    let _tray = tray::build().context("failed to build tray icon")?;
 
     let daemon = iced::daemon(move || App::new(config.clone()), App::update, App::view)
         .theme(App::theme)

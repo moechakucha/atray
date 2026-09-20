@@ -20,9 +20,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::autostart;
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS, screen};
+use crate::i18n;
 use crate::input::{self, InputEvent};
 use crate::platform::{DragHandler, WindowMaterial};
 use crate::theme;
+use crate::tray;
 use crate::widget::FileChip;
 
 const CACHE_METADATA_SUFFIX: &str = ".atray.toml";
@@ -198,8 +200,8 @@ impl DeferredFile {
 fn file_name_of(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("unknown file")
-        .to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| i18n::t("file-unknown-name"))
 }
 
 fn icon_for(path: &Path) -> Option<image::Handle> {
@@ -495,10 +497,15 @@ impl App {
 
     pub fn title(&self, id: window::Id) -> String {
         if self.config_window == Some(id) {
-            "atray Settings".to_owned()
+            i18n::t("settings-window-title")
         } else {
             String::new()
         }
+    }
+
+    fn relocalize(&self) {
+        i18n::init(self.config.appearance.language.as_deref());
+        tray::relocalize();
     }
 
     fn refresh_theme(&mut self) {
@@ -910,16 +917,24 @@ impl App {
 
         if let Err(error) = config.save_to_original() {
             if let Some(screen) = &mut self.screen {
-                screen.set_error(format!("failed to save config: {error}"));
+                screen.set_error(i18n::t_args(
+                    "error-save-config",
+                    &[("error", error.to_string().into())],
+                ));
             }
 
             return Task::none();
         }
 
         let previous_side = self.config.appearance.side;
+        let previous_language = self.config.appearance.language.clone();
         self.config = config;
         self.refresh_theme();
         self.save_session();
+
+        if self.config.appearance.language != previous_language {
+            self.relocalize();
+        }
 
         if let Some(error) = self.apply_autostart()
             && let Some(screen) = &mut self.screen
@@ -957,7 +972,12 @@ impl App {
     fn apply_autostart(&self) -> Option<String> {
         autostart::set(self.config.advanced.launch_at_login)
             .err()
-            .map(|err| format!("failed to update launch at login: {err}"))
+            .map(|err| {
+                i18n::t_args(
+                    "error-launch-at-login",
+                    &[("error", err.to_string().into())],
+                )
+            })
     }
 
     fn screen_message(&mut self, message: screen::Message) -> Task<Message> {
@@ -1191,10 +1211,15 @@ impl App {
                     }
                     "reload_config_file" => {
                         let previous_side = self.config.appearance.side;
+                        let previous_language = self.config.appearance.language.clone();
                         self.config = config::Config::load(self.config.path()).unwrap_or_default();
 
                         self.refresh_theme();
                         self.save_session();
+
+                        if self.config.appearance.language != previous_language {
+                            self.relocalize();
+                        }
 
                         if let Some(error) = self.apply_autostart() {
                             eprintln!("{error}");

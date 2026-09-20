@@ -7,6 +7,9 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Padding, window};
 
+use fluent::FluentValue;
+
+use crate::i18n;
 use crate::input::Modifier;
 use crate::theme;
 
@@ -25,10 +28,15 @@ const ICON: &[u8] = include_bytes!("../../assets/icon.png");
 const SOURCE: &str = "https://git.sr.ht/~flamarine/atray";
 const ISSUES: &str = "https://todo.sr.ht/~flamarine/atray";
 
-const MODIFIER_LABELS: [&str; 4] = ["Alt", "Control", "Shift", "Super"];
-const SIDE_LABELS: [&str; 4] = ["Left", "Right", "Top", "Bottom"];
-const THEME_LABELS: [&str; 3] = ["System", "Light", "Dark"];
-const ACTION_LABELS: [&str; 2] = ["Allow", "Deny"];
+const MODIFIERS: [Modifier; 4] = [
+    Modifier::Alt,
+    Modifier::Control,
+    Modifier::Shift,
+    Modifier::Super,
+];
+const SIDES: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+const THEMES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+const ACTIONS: [FilterAction; 2] = [FilterAction::Allow, FilterAction::Deny];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -41,13 +49,13 @@ pub enum Tab {
 impl Tab {
     const ALL: [Tab; 4] = [Tab::Behavior, Tab::Appearance, Tab::Advanced, Tab::About];
 
-    fn label(self) -> &'static str {
-        match self {
-            Tab::Behavior => "Behavior",
-            Tab::Appearance => "Appearance",
-            Tab::Advanced => "Advanced",
-            Tab::About => "About",
-        }
+    fn label(self) -> String {
+        i18n::t(match self {
+            Tab::Behavior => "tab-behavior",
+            Tab::Appearance => "tab-appearance",
+            Tab::Advanced => "tab-advanced",
+            Tab::About => "tab-about",
+        })
     }
 }
 
@@ -63,6 +71,7 @@ pub enum Message {
     RuleAdd,
     Side(Side),
     Theme(ThemeMode),
+    Language(Option<String>),
     CacheDir(String),
     LaunchAtLogin(bool),
     Revert,
@@ -95,10 +104,21 @@ impl RuleDraft {
     }
 
     fn to_rule(&self, index: usize) -> Result<FilterRule, String> {
+        let index = FluentValue::from(index + 1);
+
         Ok(FilterRule {
-            app: pattern(&self.app).map_err(|error| format!("Rule {}: app: {error}", index + 1))?,
-            title: pattern(&self.title)
-                .map_err(|error| format!("Rule {}: title: {error}", index + 1))?,
+            app: pattern(&self.app).map_err(|error| {
+                i18n::t_args(
+                    "error-rule-app",
+                    &[("index", index.clone()), ("error", error.into())],
+                )
+            })?,
+            title: pattern(&self.title).map_err(|error| {
+                i18n::t_args(
+                    "error-rule-window-title",
+                    &[("index", index.clone()), ("error", error.into())],
+                )
+            })?,
             action: self.action,
         })
     }
@@ -123,6 +143,7 @@ pub struct Screen {
     rules: Vec<RuleDraft>,
     side: Side,
     theme: ThemeMode,
+    language: Option<String>,
     cache_dir: String,
     launch_at_login: bool,
     error: Option<String>,
@@ -143,6 +164,7 @@ impl Screen {
                 .collect(),
             side: config.appearance.side,
             theme: config.appearance.theme,
+            language: config.appearance.language.clone(),
             cache_dir: config.advanced.cache_dir.clone(),
             launch_at_login: config.advanced.launch_at_login,
             error: None,
@@ -162,6 +184,7 @@ impl Screen {
         config.behavior.filter = filter;
         config.appearance.side = self.side;
         config.appearance.theme = self.theme;
+        config.appearance.language = self.language.clone();
         config.advanced.cache_dir = self.cache_dir.trim().to_owned();
         config.advanced.launch_at_login = self.launch_at_login;
 
@@ -200,6 +223,7 @@ impl Screen {
             }),
             Message::Side(side) => self.side = side,
             Message::Theme(theme) => self.theme = theme,
+            Message::Language(language) => self.language = language,
             Message::CacheDir(value) => self.cache_dir = value,
             Message::LaunchAtLogin(enabled) => self.launch_at_login = enabled,
             Message::Revert | Message::Save => {}
@@ -298,16 +322,16 @@ impl Screen {
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
         let mut items: Vec<Element<'_, Message>> = vec![
-            note("Copy and move", colors),
+            note(i18n::t("behavior-copy-and-move"), colors),
             card(
                 vec![
                     setting_row(
-                        "Move modifier",
-                        "Hold this key while dropping to move the file instead of copying it.",
+                        i18n::t("behavior-move-modifier"),
+                        i18n::t("behavior-move-modifier-description"),
                         pick_list(
-                            &MODIFIER_LABELS[..],
+                            options(&MODIFIERS, modifier_label),
                             Some(modifier_label(self.move_modifier)),
-                            |label| Message::MoveModifier(modifier_of(label)),
+                            |label| Message::MoveModifier(modifier_of(&label)),
                         )
                         .style(move |theme, status| {
                             theme::settings_pick_list(theme, status, metrics)
@@ -317,8 +341,8 @@ impl Screen {
                         colors,
                     ),
                     setting_row(
-                        "Invert copy and move",
-                        "Swap which action happens by default and which one needs the modifier.",
+                        i18n::t("behavior-invert"),
+                        i18n::t("behavior-invert-description"),
                         toggler(self.invert_copy_and_move)
                             .on_toggle(Message::InvertCopyAndMove)
                             .into(),
@@ -327,13 +351,8 @@ impl Screen {
                 ],
                 metrics,
             ),
-            note("Source filter", colors),
-            note(
-                "Rules are checked from top to bottom against the app and window title \
-                 a drag started from. The first match wins; if nothing matches, the drag \
-                 is accepted. Both patterns are regular expressions.",
-                colors,
-            ),
+            note(i18n::t("behavior-source-filter"), colors),
+            note(i18n::t("behavior-source-filter-description"), colors),
         ];
 
         for (index, rule) in self.rules.iter().enumerate() {
@@ -341,7 +360,7 @@ impl Screen {
         }
 
         items.push(
-            button(text("Add rule").size(LABEL_SIZE))
+            button(text(i18n::t("behavior-add-rule")).size(LABEL_SIZE))
                 .on_press(Message::RuleAdd)
                 .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([6, 12])
@@ -359,9 +378,14 @@ impl Screen {
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
         let header = row(vec![
-            text(format!("Rule {}", index + 1)).size(LABEL_SIZE).into(),
+            text(i18n::t_args(
+                "rule-heading",
+                &[("index", FluentValue::from(index + 1))],
+            ))
+            .size(LABEL_SIZE)
+            .into(),
             space().width(Length::Fill).into(),
-            button(text("Remove").size(NOTE_SIZE))
+            button(text(i18n::t("rule-remove")).size(NOTE_SIZE))
                 .on_press(Message::RuleRemove(index))
                 .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([4, 10])
@@ -373,8 +397,8 @@ impl Screen {
             vec![
                 header.into(),
                 setting_row(
-                    "App",
-                    "Matched against the name of the app the drag started from.",
+                    i18n::t("rule-app"),
+                    i18n::t("rule-app-description"),
                     text_input("", &rule.app)
                         .on_input(move |value| Message::RuleApp(index, value))
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
@@ -383,8 +407,8 @@ impl Screen {
                     colors,
                 ),
                 setting_row(
-                    "Title",
-                    "Matched against the title of the window the drag started from.",
+                    i18n::t("rule-window-title"),
+                    i18n::t("rule-window-title-description"),
                     text_input("", &rule.title)
                         .on_input(move |value| Message::RuleTitle(index, value))
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
@@ -393,12 +417,12 @@ impl Screen {
                     colors,
                 ),
                 setting_row(
-                    "Action",
-                    "Whether a drag that matches this rule is accepted or rejected.",
+                    i18n::t("rule-action"),
+                    i18n::t("rule-action-description"),
                     pick_list(
-                        &ACTION_LABELS[..],
+                        options(&ACTIONS, action_label),
                         Some(action_label(rule.action)),
-                        move |label| Message::RuleAction(index, action_of(label)),
+                        move |label| Message::RuleAction(index, action_of(&label)),
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
@@ -415,15 +439,21 @@ impl Screen {
         colors: theme::Colors,
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
+        let language = language_options();
+        let language_labels: Vec<String> =
+            language.iter().map(|(label, _)| label.clone()).collect();
+
         column(vec![
-            note("Window", colors),
+            note(i18n::t("appearance-window"), colors),
             card(
                 vec![setting_row(
-                    "Side",
-                    "Which edge of the screen the tray slides in from.",
-                    pick_list(&SIDE_LABELS[..], Some(side_label(self.side)), |label| {
-                        Message::Side(side_of(label))
-                    })
+                    i18n::t("appearance-side"),
+                    i18n::t("appearance-side-description"),
+                    pick_list(
+                        options(&SIDES, side_label),
+                        Some(side_label(self.side)),
+                        |label| Message::Side(side_of(&label)),
+                    )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
                     .into(),
@@ -431,14 +461,40 @@ impl Screen {
                 )],
                 metrics,
             ),
-            note("Theme", colors),
+            note(i18n::t("appearance-theme"), colors),
             card(
                 vec![setting_row(
-                    "Theme",
-                    "Follow the system appearance, or force a light or dark theme.",
-                    pick_list(&THEME_LABELS[..], Some(theme_label(self.theme)), |label| {
-                        Message::Theme(theme_of(label))
-                    })
+                    i18n::t("appearance-theme"),
+                    i18n::t("appearance-theme-description"),
+                    pick_list(
+                        options(&THEMES, theme_label),
+                        Some(theme_label(self.theme)),
+                        |label| Message::Theme(theme_of(&label)),
+                    )
+                    .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
+                    .width(Length::Fixed(CONTROL_WIDTH))
+                    .into(),
+                    colors,
+                )],
+                metrics,
+            ),
+            note(i18n::t("appearance-language"), colors),
+            card(
+                vec![setting_row(
+                    i18n::t("appearance-language"),
+                    i18n::t("appearance-language-description"),
+                    pick_list(
+                        language_labels,
+                        Some(language_label(self.language.as_deref())),
+                        move |label| {
+                            Message::Language(
+                                language
+                                    .iter()
+                                    .find(|(name, _)| *name == label)
+                                    .and_then(|(_, language)| language.clone()),
+                            )
+                        },
+                    )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
                     .into(),
@@ -457,11 +513,11 @@ impl Screen {
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
         column(vec![
-            note("Cache", colors),
+            note(i18n::t("advanced-cache"), colors),
             card(
                 vec![setting_row(
-                    "Cache directory",
-                    "Where files are kept after they are moved into the tray.",
+                    i18n::t("advanced-cache-directory"),
+                    i18n::t("advanced-cache-directory-description"),
                     text_input("", &self.cache_dir)
                         .on_input(Message::CacheDir)
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
@@ -471,16 +527,12 @@ impl Screen {
                 )],
                 metrics,
             ),
-            note(
-                "Leave empty to keep moved files in a temporary directory that is deleted \
-                 when atray quits.",
-                colors,
-            ),
-            note("Startup", colors),
+            note(i18n::t("advanced-cache-directory-note"), colors),
+            note(i18n::t("advanced-startup"), colors),
             card(
                 vec![setting_row(
-                    "Launch at login",
-                    "Start the tray automatically when you log in.",
+                    i18n::t("advanced-launch-at-login"),
+                    i18n::t("advanced-launch-at-login-description"),
                     toggler(self.launch_at_login)
                         .on_toggle(Message::LaunchAtLogin)
                         .into(),
@@ -516,10 +568,13 @@ impl Screen {
         );
         header.push(
             container(
-                text(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                    .size(NOTE_SIZE)
-                    .color(colors.note())
-                    .wrapping(Wrapping::Word),
+                text(i18n::t_args(
+                    "about-version",
+                    &[("version", env!("CARGO_PKG_VERSION").into())],
+                ))
+                .size(NOTE_SIZE)
+                .color(colors.note())
+                .wrapping(Wrapping::Word),
             )
             .center_x(Length::Fill)
             .padding([0.0, 24.0])
@@ -527,7 +582,7 @@ impl Screen {
         );
         header.push(
             container(
-                text(env!("CARGO_PKG_DESCRIPTION"))
+                text(i18n::t("about-description"))
                     .size(NOTE_SIZE)
                     .color(colors.note())
                     .wrapping(Wrapping::Word),
@@ -540,11 +595,7 @@ impl Screen {
         column(vec![
             column(header).spacing(6).into(),
             link_buttons(metrics).into(),
-            note(
-                "© 2026 moechakucha. Licensed under the GNU General Public License v3.0.",
-                colors,
-            )
-            .into(),
+            note(i18n::t("about-copyright"), colors).into(),
         ])
         .spacing(20)
         .into()
@@ -560,12 +611,12 @@ impl Screen {
         };
 
         let buttons = row(vec![
-            button(text("Revert").size(LABEL_SIZE))
+            button(text(i18n::t("footer-revert")).size(LABEL_SIZE))
                 .on_press(Message::Revert)
                 .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([6, 12])
                 .into(),
-            button(text("Save").size(LABEL_SIZE))
+            button(text(i18n::t("footer-save")).size(LABEL_SIZE))
                 .on_press(Message::Save)
                 .style(move |theme, status| theme::settings_primary_button(theme, status, metrics))
                 .padding([6, 12])
@@ -619,8 +670,8 @@ fn card<'a>(rows: Vec<Element<'a, Message>>, metrics: theme::Metrics) -> Element
 }
 
 fn setting_row<'a>(
-    label: &'a str,
-    description: &'a str,
+    label: String,
+    description: String,
     control: Element<'a, Message>,
     colors: theme::Colors,
 ) -> Element<'a, Message> {
@@ -639,8 +690,12 @@ fn setting_row<'a>(
         .into()
 }
 
-fn note<'a>(label: &'a str, colors: theme::Colors) -> Element<'a, Message> {
+fn note<'a>(label: String, colors: theme::Colors) -> Element<'a, Message> {
     text(label).size(NOTE_SIZE).color(colors.note()).into()
+}
+
+fn options<T: Copy>(values: &[T], label: fn(T) -> String) -> Vec<String> {
+    values.iter().map(|value| label(*value)).collect()
 }
 
 fn icon_handle() -> Option<Handle> {
@@ -661,79 +716,98 @@ fn icon_handle() -> Option<Handle> {
         .clone()
 }
 
-fn modifier_label(modifier: Modifier) -> &'static str {
-    match modifier {
-        Modifier::Alt => "Alt",
-        Modifier::Control => "Control",
-        Modifier::Shift => "Shift",
-        Modifier::Super => "Super",
-    }
+fn modifier_label(modifier: Modifier) -> String {
+    i18n::t(match modifier {
+        Modifier::Alt => "modifier-alt",
+        Modifier::Control => "modifier-control",
+        Modifier::Shift => "modifier-shift",
+        Modifier::Super => "modifier-super",
+    })
 }
 
 fn modifier_of(label: &str) -> Modifier {
-    match label {
-        "Alt" => Modifier::Alt,
-        "Control" => Modifier::Control,
-        "Super" => Modifier::Super,
-        _ => Modifier::Shift,
-    }
+    MODIFIERS
+        .into_iter()
+        .find(|modifier| modifier_label(*modifier) == label)
+        .unwrap_or(Modifier::Shift)
 }
 
-fn side_label(side: Side) -> &'static str {
-    match side {
-        Side::Left => "Left",
-        Side::Right => "Right",
-        Side::Top => "Top",
-        Side::Bottom => "Bottom",
-    }
+fn side_label(side: Side) -> String {
+    i18n::t(match side {
+        Side::Left => "side-left",
+        Side::Right => "side-right",
+        Side::Top => "side-top",
+        Side::Bottom => "side-bottom",
+    })
 }
 
 fn side_of(label: &str) -> Side {
-    match label {
-        "Right" => Side::Right,
-        "Top" => Side::Top,
-        "Bottom" => Side::Bottom,
-        _ => Side::Left,
-    }
+    SIDES
+        .into_iter()
+        .find(|side| side_label(*side) == label)
+        .unwrap_or(Side::Left)
 }
 
-fn theme_label(theme: ThemeMode) -> &'static str {
-    match theme {
-        ThemeMode::System => "System",
-        ThemeMode::Light => "Light",
-        ThemeMode::Dark => "Dark",
-    }
+fn theme_label(theme: ThemeMode) -> String {
+    i18n::t(match theme {
+        ThemeMode::System => "theme-system",
+        ThemeMode::Light => "theme-light",
+        ThemeMode::Dark => "theme-dark",
+    })
 }
 
 fn theme_of(label: &str) -> ThemeMode {
-    match label {
-        "Light" => ThemeMode::Light,
-        "Dark" => ThemeMode::Dark,
-        _ => ThemeMode::System,
-    }
+    THEMES
+        .into_iter()
+        .find(|theme| theme_label(*theme) == label)
+        .unwrap_or(ThemeMode::System)
 }
 
-fn action_label(action: FilterAction) -> &'static str {
-    match action {
-        FilterAction::Allow => "Allow",
-        FilterAction::Deny => "Deny",
-    }
+fn action_label(action: FilterAction) -> String {
+    i18n::t(match action {
+        FilterAction::Allow => "action-allow",
+        FilterAction::Deny => "action-deny",
+    })
 }
 
 fn action_of(label: &str) -> FilterAction {
-    match label {
-        "Allow" => FilterAction::Allow,
-        _ => FilterAction::Deny,
-    }
+    ACTIONS
+        .into_iter()
+        .find(|action| action_label(*action) == label)
+        .unwrap_or(FilterAction::Deny)
+}
+
+fn language_options() -> Vec<(String, Option<String>)> {
+    let mut options = vec![(i18n::t("language-system"), None)];
+
+    options.extend(
+        i18n::locales()
+            .into_iter()
+            .map(|locale| (i18n::name(&locale), Some(locale.to_string()))),
+    );
+
+    options
+}
+
+fn language_label(language: Option<&str>) -> String {
+    let Some(language) = language else {
+        return i18n::t("language-system");
+    };
+
+    language_options()
+        .into_iter()
+        .find(|(_, value)| value.as_deref() == Some(language))
+        .map(|(label, _)| label)
+        .unwrap_or_else(|| language.to_string())
 }
 
 fn link_buttons<'a>(metrics: theme::Metrics) -> Element<'a, Message> {
     row![
-        button(text("Source").align_x(iced::alignment::Horizontal::Center))
+        button(text(i18n::t("about-source")).align_x(iced::alignment::Horizontal::Center))
             .on_press(Message::OpenLink(SOURCE))
             .width(Length::Fill)
             .style(move |theme, status| theme::settings_button(theme, status, metrics)),
-        button(text("Issues").align_x(iced::alignment::Horizontal::Center))
+        button(text(i18n::t("about-issues")).align_x(iced::alignment::Horizontal::Center))
             .on_press(Message::OpenLink(ISSUES))
             .width(Length::Fill)
             .style(move |theme, status| theme::settings_button(theme, status, metrics))

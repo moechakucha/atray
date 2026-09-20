@@ -184,6 +184,8 @@ pub struct AppearanceConfig {
     pub side: Side,
     #[serde(default)]
     pub theme: ThemeMode,
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +249,7 @@ impl Default for AppearanceConfig {
         Self {
             side: Side::default(),
             theme: ThemeMode::default(),
+            language: None,
         }
     }
 }
