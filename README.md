@@ -1,5 +1,5 @@
 <h1>
-  <img src="https://git.sr.ht/~flamarine/atray/blob/trunk/assets/icon.png" width="30" style="vertical-align: middle; margin-right: 8px;">
+  <img src="https://github.com/moechakucha/atray/blob/trunk/assets/icon.png?raw=true" width="30" style="vertical-align: middle; margin-right: 8px;">
   <span>atray</span>
 </h1>
 
