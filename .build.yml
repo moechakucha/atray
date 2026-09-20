@@ -1,5 +1,8 @@
 image: debian/stable
 
+secrets:
+  - c4535cec-7c9b-4ca6-a8a9-9425e175d6da
+
 packages:
   - bison
   - build-essential
@@ -29,9 +32,15 @@ environment:
   LIBDMG_HFSPLUS: /home/build/libdmg-hfsplus
 
 sources:
-  - https://git.sr.ht/~flamarine/atray
+  - git+ssh://git@git.sr.ht/~flamarine/atray
 
 tasks:
+  - mirror-to-github: |
+      cd "$HOME/atray"
+      ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+      git remote add github git@github.com:moechakucha/atray.git
+      git push --prune github '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+
   - setup: |
       set -eux
 
