@@ -47,6 +47,12 @@ pub fn relocalize() {
 }
 
 fn menu() -> anyhow::Result<Menu> {
+    let modifier = if cfg!(target_os = "windows") {
+        Modifiers::CONTROL
+    } else {
+        Modifiers::META
+    };
+
     let version = MenuItem::new(
         i18n::t_args("menu-version", &[("version", VERSION.into())]),
         false,
@@ -63,11 +69,11 @@ fn menu() -> anyhow::Result<Menu> {
     let quit = MenuItem::with_id("quit", i18n::t("menu-quit"), true, None);
 
     settings.set_accelerator(Some(Accelerator::new(
-        Modifiers::META,
+        modifier.clone(),
         tray_icon::menu::accelerator::Code::Comma,
     )))?;
     quit.set_accelerator(Some(Accelerator::new(
-        Modifiers::META,
+        modifier.clone(),
         tray_icon::menu::accelerator::Code::KeyQ,
     )))?;
 

@@ -6,6 +6,12 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "windows")]
+pub use windows::*;
+
 #[cfg(not(target_os = "macos"))]
 mod rdev_input;
 
@@ -31,9 +37,24 @@ pub fn get_drag_handler() -> Box<dyn DragHandler> {
     Box::new(MacosDragHandler::new())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub fn get_drag_handler() -> Box<dyn DragHandler> {
+    Box::new(WindowsDragHandler::new())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn get_drag_handler() -> Box<dyn DragHandler> {
     todo!("implement a drag handler for this platform")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn app_init() -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
+    iced::window::settings::PlatformSpecific::default()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
