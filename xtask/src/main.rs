@@ -640,6 +640,10 @@ fn build_msi(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Resul
 
     wixl(sh, &manifest, &msi, wixl_arch(target))?;
 
+    if let Some(platform) = wixl_platform(target) {
+        msibuild(sh, &msi, metadata, platform)?;
+    }
+
     Ok(msi)
 }
 
@@ -791,9 +795,35 @@ fn wixl(sh: &Shell, manifest: &Path, msi: &Path, arch: &str) -> Result<()> {
 fn wixl_arch(target: &str) -> &'static str {
     match target.split('-').next() {
         Some("i586" | "i686") => "x86",
-        Some("aarch64") => "arm64",
         _ => "x64",
     }
+}
+
+fn wixl_platform(target: &str) -> Option<&'static str> {
+    match target.split('-').next() {
+        Some("aarch64") => Some("Arm64"),
+        _ => None,
+    }
+}
+
+fn msibuild(sh: &Shell, msi: &Path, metadata: &Metadata, platform: &str) -> Result<()> {
+    let tool = tool_from_env("MSIBUILD", "msibuild");
+
+    sh.cmd(&tool)
+        .arg(msi)
+        .arg("-s")
+        .arg(metadata.bundle_name())
+        .arg(manufacturer(metadata.identifier()))
+        .arg(format!("{platform};1033"))
+        .run()
+        .with_context(|| {
+            format!(
+                "failed to run {} (install msitools or set MSIBUILD)",
+                tool.display()
+            )
+        })?;
+
+    Ok(())
 }
 
 fn stable_guid(seed: &str) -> String {
