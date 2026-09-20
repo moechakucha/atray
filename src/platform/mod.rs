@@ -96,7 +96,7 @@ pub struct FileIcon {
     pub rgba: Vec<u8>,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn file_icon(_path: &std::path::Path, _size: u32) -> Option<FileIcon> {
     None
 }

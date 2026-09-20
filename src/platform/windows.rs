@@ -1,7 +1,8 @@
 use std::{
+    ffi::c_void,
     mem::{ManuallyDrop, size_of},
     os::windows::ffi::OsStrExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     sync::{
         Mutex,
@@ -14,7 +15,11 @@ use windows::{
         Foundation::{
             DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
             E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, OLE_E_ADVISENOTSUPPORTED,
-            OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK,
+            OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK, SIZE,
+        },
+        Graphics::Gdi::{
+            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS,
+            DeleteDC, DeleteObject, GetDIBits, GetObjectW, HBITMAP, HGDIOBJ,
         },
         System::{
             Com::{
@@ -34,18 +39,20 @@ use windows::{
                 GetAsyncKeyState, VIRTUAL_KEY, VK_LBUTTON, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
                 VK_LWIN, VK_RBUTTON, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
             },
-            Shell::DROPFILES,
+            Shell::{
+                DROPFILES, IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF,
+                SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
+            },
             WindowsAndMessaging::FindWindowW,
         },
     },
-    core::{BOOL, Error, HRESULT, Ref, Result, implement, w},
+    core::{BOOL, Error, HRESULT, PCWSTR, Ref, Result, implement, w},
 };
 
 use crate::input::{InputHandler, InputSink, Modifier, Modifiers};
-use crate::platform::{DragEffect, DragHandler, RdevInputHandler};
+use crate::platform::{DragEffect, DragHandler, FileIcon, RdevInputHandler};
 
 static DRAGGING: AtomicBool = AtomicBool::new(false);
-static LAST_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub fn app_init() -> anyhow::Result<()> {
     unsafe { OleInitialize(None)? };
@@ -81,10 +88,6 @@ impl DragHandler for WindowsDragHandler {
 
         let dragging = DRAGGING.load(Ordering::Relaxed);
 
-        if LAST_LOGGED.swap(dragging, Ordering::Relaxed) != dragging {
-            eprintln!("[atray] dragging -> {dragging}");
-        }
-
         dragging
     }
 
@@ -107,8 +110,6 @@ impl DragHandler for WindowsDragHandler {
         let hr = unsafe { DoDragDrop(&data, &source, allowed, &mut performed) };
 
         *self.result.lock().unwrap() = Some(hr.is_ok() && performed != DROPEFFECT_NONE);
-
-        eprintln!("[atray] drag out: {hr:?}, effect {}", performed.0);
 
         true
     }
@@ -158,6 +159,128 @@ impl InputHandler for WindowsInputHandler {
 
 fn key_down(key: VIRTUAL_KEY) -> bool {
     unsafe { GetAsyncKeyState(key.0 as i32) < 0 }
+}
+
+pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {
+    let size = size.max(1);
+
+    let image = shell_image(path, size, SIIGBF_THUMBNAILONLY)
+        .or_else(|| shell_image(path, size, SIIGBF_ICONONLY))?;
+
+    Some(icon_canvas(image, size))
+}
+
+fn shell_image(path: &Path, size: u32, kind: SIIGBF) -> Option<image::RgbaImage> {
+    let mut name: Vec<u16> = path.as_os_str().encode_wide().collect();
+    name.push(0);
+
+    unsafe {
+        let item: IShellItemImageFactory =
+            SHCreateItemFromParsingName(PCWSTR(name.as_ptr()), None).ok()?;
+        let flags = SIIGBF(kind.0 | SIIGBF_BIGGERSIZEOK.0);
+        let bitmap = item
+            .GetImage(
+                SIZE {
+                    cx: size as i32,
+                    cy: size as i32,
+                },
+                flags,
+            )
+            .ok()?;
+        let image = bitmap_image(&bitmap);
+
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+
+        image
+    }
+}
+
+fn bitmap_image(bitmap: &HBITMAP) -> Option<image::RgbaImage> {
+    unsafe {
+        let mut basic = BITMAP::default();
+        let object = GetObjectW(
+            HGDIOBJ(bitmap.0),
+            size_of::<BITMAP>() as i32,
+            Some(&mut basic as *mut BITMAP as *mut c_void),
+        );
+
+        if object == 0 {
+            return None;
+        }
+
+        let width = basic.bmWidth;
+        let height = basic.bmHeight.abs();
+
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..BITMAPINFOHEADER::default()
+            },
+            ..BITMAPINFO::default()
+        };
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let dc = CreateCompatibleDC(None);
+
+        if dc.is_invalid() {
+            return None;
+        }
+
+        let rows = GetDIBits(
+            dc,
+            *bitmap,
+            0,
+            height as u32,
+            Some(pixels.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+
+        let _ = DeleteDC(dc);
+
+        if rows == 0 {
+            return None;
+        }
+
+        let mut alpha_unset = true;
+
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            alpha_unset &= pixel[3] == 0;
+        }
+
+        if alpha_unset {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+
+        image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+    }
+}
+
+fn icon_canvas(source: image::RgbaImage, size: u32) -> FileIcon {
+    let scaled =
+        image::imageops::resize(&source, size, size, image::imageops::FilterType::Lanczos3);
+    let mut canvas = image::RgbaImage::new(size, size);
+    let x = ((size - scaled.width()) / 2) as i64;
+    let y = ((size - scaled.height()) / 2) as i64;
+
+    image::imageops::overlay(&mut canvas, &scaled, x, y);
+
+    FileIcon {
+        width: canvas.width(),
+        height: canvas.height(),
+        rgba: canvas.into_raw(),
+    }
 }
 
 fn mouse_button_down() -> bool {
