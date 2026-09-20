@@ -76,7 +76,7 @@ tasks:
 
       ( cd "$LIBDMG_HFSPLUS" && cmake . && make -j"$(nproc)" )
 
-  - bundle: |
+  - bundle-macos: |
       set -eux
       . "$HOME/.cargo/env"
 
