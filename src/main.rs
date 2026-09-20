@@ -58,12 +58,12 @@ fn main() -> anyhow::Result<()> {
     config.save_to_original()?;
 
     let version = env!("CARGO_PKG_VERSION");
-    let icon_bytes = include_bytes!("../assets/icon.png");
+    let tray_icon_bytes = include_bytes!("../assets/tray_icon.png");
 
     let menu = construct_menu(&version)?;
 
     let _tray_icon = tray_icon::TrayIconBuilder::new()
-        .with_icon(load_icon(icon_bytes)?)
+        .with_icon(load_icon(tray_icon_bytes)?)
         .with_icon_as_template(true)
         .with_tooltip("atray")
         .with_menu(Box::new(menu))

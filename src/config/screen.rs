@@ -2,8 +2,8 @@ use iced::advanced::image::Handle;
 use iced::advanced::text::Wrapping;
 use iced::alignment::Horizontal;
 use iced::widget::{
-    Column, button, checkbox, column, container, image, pick_list, rich_text, row, rule,
-    scrollable, space, span, text, text_input,
+    Column, button, checkbox, column, container, image, pick_list, row, rule, scrollable, space,
+    text, text_input,
 };
 use iced::{Alignment, ContentFit, Element, Length, Padding, window};
 
@@ -24,6 +24,7 @@ const ICON_RENDER_SIZE: f32 = 96.0;
 const ICON: &[u8] = include_bytes!("../../assets/icon.png");
 const LICENSE: &str = "GPLv3";
 const SOURCE: &str = "https://git.sr.ht/~flamarine/atray";
+const ISSUES: &str = "https://todo.sr.ht/~flamarine/atray";
 
 const MODIFIER_LABELS: [&str; 4] = ["Alt", "Control", "Shift", "Super"];
 const SIDE_LABELS: [&str; 4] = ["Left", "Right", "Top", "Bottom"];
@@ -506,25 +507,17 @@ impl Screen {
                     colors,
                 ),
                 setting_row("License", "", text(LICENSE).size(LABEL_SIZE).into(), colors),
-                setting_row(
-                    "Source",
-                    "",
-                    rich_text([span(SOURCE)
-                        .size(LABEL_SIZE)
-                        .color(iced::Color::from_rgb8(0, 102, 204))
-                        .underline(true)
-                        .link(SOURCE)])
-                    .on_link_click(|url: &str| Message::OpenLink(url))
-                    .into(),
-                    colors,
-                ),
             ],
             radius,
         );
 
-        column(vec![column(header).spacing(6).into(), rows.into()])
-            .spacing(20)
-            .into()
+        column(vec![
+            column(header).spacing(6).into(),
+            rows.into(),
+            link_buttons(radius).into(),
+        ])
+        .spacing(20)
+        .into()
     }
 
     fn footer(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
@@ -702,4 +695,20 @@ fn action_of(label: &str) -> FilterAction {
         "Allow" => FilterAction::Allow,
         _ => FilterAction::Deny,
     }
+}
+
+fn link_buttons<'a>(radius: f32) -> Element<'a, Message> {
+    row![
+        button(text("Source").align_x(iced::alignment::Horizontal::Center))
+            .on_press(Message::OpenLink(SOURCE))
+            .width(Length::Fill)
+            .style(move |theme, status| theme::settings_button(theme, status, radius)),
+        button(text("Issues").align_x(iced::alignment::Horizontal::Center))
+            .on_press(Message::OpenLink(ISSUES))
+            .width(Length::Fill)
+            .style(move |theme, status| theme::settings_button(theme, status, radius))
+    ]
+    .spacing(6)
+    .width(Length::Fill)
+    .into()
 }
