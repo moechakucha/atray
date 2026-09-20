@@ -52,6 +52,11 @@ pub fn titlebar_inset() -> f32 {
     0.0
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn window_radius() -> f32 {
+    0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIcon {
     pub width: u32,
@@ -62,4 +67,20 @@ pub struct FileIcon {
 #[cfg(not(target_os = "macos"))]
 pub fn file_icon(_path: &std::path::Path, _size: u32) -> Option<FileIcon> {
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMaterial {
+    Tray,
+    Settings,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn apply_window_material(
+    _window: iced::window::Id,
+    _material: WindowMaterial,
+    _radius: Option<f32>,
+    _dark: bool,
+) -> iced::Task<()> {
+    iced::Task::none()
 }

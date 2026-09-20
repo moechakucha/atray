@@ -207,7 +207,7 @@ impl AppearanceConfig {
             resizable: false,
             transparent: true,
             minimizable: false,
-            blur: true,
+            blur: false,
             level: window::Level::AlwaysOnTop,
             exit_on_close_request: false,
             platform_specific: crate::platform::platform_window_settings(),

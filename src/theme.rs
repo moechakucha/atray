@@ -22,7 +22,9 @@ pub struct Colors {
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
     pub chip_size: f32,
-    pub card_radius: f32,
+    pub small_radius: f32,
+    pub large_radius: f32,
+    pub line_width: f32,
     pub card_padding: f32,
     pub icon_size: f32,
     pub icon_gap: f32,
@@ -32,9 +34,9 @@ pub struct Metrics {
 
 pub const SPACING: f32 = 6.0;
 pub const VIEW_PADDING: f32 = 8.0;
-pub const WINDOW_RADIUS: f32 = 12.0;
 
-const SURFACE_ALPHA: f32 = 0.72;
+const SURFACE_ALPHA: f32 = 0.4;
+const TINT_ALPHA: f32 = 0.72;
 pub const CARD_PADDING: f32 = 8.0;
 pub const ICON_SIZE: f32 = 64.0;
 const ICON_GAP: f32 = 4.0;
@@ -43,11 +45,20 @@ fn chip_size(icon_size: f32, name_size: f32, line_height: f32) -> f32 {
     (CARD_PADDING * 2.0 + icon_size + ICON_GAP + name_size * line_height).ceil()
 }
 
+fn large_radius(fallback: f32) -> f32 {
+    match crate::platform::window_radius() {
+        0.0 => fallback,
+        radius => radius,
+    }
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         Self {
             chip_size: chip_size(ICON_SIZE, 12.5, 1.3),
-            card_radius: 10.0,
+            small_radius: 10.0,
+            large_radius: large_radius(10.0),
+            line_width: 1.0,
             card_padding: CARD_PADDING,
             icon_size: ICON_SIZE,
             icon_gap: ICON_GAP,
@@ -61,10 +72,15 @@ impl Metrics {
     pub fn of(resolved: &ResolvedTheme) -> Self {
         let name_size = native_theme_iced::font_size(resolved).clamp(10.0, 20.0);
         let line_height = native_theme_iced::line_height_multiplier(resolved).max(1.0);
+        let small_radius = native_theme_iced::border_radius(resolved).clamp(4.0, 16.0);
 
         Self {
             chip_size: chip_size(ICON_SIZE, name_size, line_height),
-            card_radius: native_theme_iced::border_radius(resolved).clamp(4.0, 16.0),
+            small_radius,
+            large_radius: large_radius(
+                native_theme_iced::border_radius_lg(resolved).clamp(small_radius, 24.0),
+            ),
+            line_width: resolved.defaults.border.line_width.clamp(0.5, 2.0),
             card_padding: CARD_PADDING,
             icon_size: ICON_SIZE,
             icon_gap: ICON_GAP,
@@ -79,33 +95,26 @@ impl Colors {
         let base = theme.palette();
         let extended = theme.extended_palette();
         let dark = extended.is_dark;
-        let background = base.background.scale_alpha(SURFACE_ALPHA);
-
-        let shade = |amount: f32| shade(background, theme, amount);
-
-        let (surface, card_hover, card_pressed, border, border_hover) = if dark {
-            (
-                background,
-                shade(0.10),
-                shade(0.15),
-                shade(0.12),
-                shade(0.20),
-            )
+        let opaque = if dark {
+            base.background
         } else {
-            (
-                shade(0.06),
-                shade(0.04),
-                shade(0.09),
-                shade(0.11),
-                shade(0.17),
-            )
+            shade(base.background, theme, 0.06)
+        };
+
+        let surface = opaque.scale_alpha(SURFACE_ALPHA);
+        let tint = |amount: f32| shade(opaque, theme, amount).scale_alpha(TINT_ALPHA);
+
+        let (card_hover, card_pressed, border, border_hover) = if dark {
+            (tint(0.10), tint(0.15), tint(0.12), tint(0.20))
+        } else {
+            (tint(0.04), tint(0.09), tint(0.11), tint(0.17))
         };
 
         Self {
             surface,
             card_hover,
             card_pressed,
-            card_selected: extended.primary.weak.color.scale_alpha(SURFACE_ALPHA),
+            card_selected: extended.primary.weak.color.scale_alpha(TINT_ALPHA),
             border,
             border_hover,
             accent: base.primary,
@@ -155,29 +164,29 @@ pub fn resolve(mode: ThemeMode, system: Mode) -> (Option<Theme>, Metrics) {
     }
 }
 
-pub fn surface(theme: &Theme) -> container::Style {
+pub fn surface(theme: &Theme, metrics: Metrics) -> container::Style {
     let colors = Colors::of(theme);
 
     container::Style {
         background: Some(Background::Color(colors.surface)),
         border: Border {
             color: colors.border,
-            width: 1.0,
-            radius: WINDOW_RADIUS.into(),
+            width: metrics.line_width,
+            radius: metrics.large_radius.into(),
         },
         ..container::Style::default()
     }
 }
 
-pub fn tooltip(theme: &Theme) -> container::Style {
+pub fn tooltip(theme: &Theme, metrics: Metrics) -> container::Style {
     let colors = Colors::of(theme);
 
     container::Style {
         background: Some(Background::Color(theme.palette().background)),
         border: Border {
             color: colors.border_hover,
-            width: 1.0,
-            radius: WINDOW_RADIUS.into(),
+            width: metrics.line_width,
+            radius: metrics.large_radius.into(),
         },
         text_color: Some(colors.text),
         ..container::Style::default()
@@ -205,7 +214,7 @@ pub fn settings_sidebar(theme: &Theme) -> container::Style {
     }
 }
 
-pub fn settings_card(theme: &Theme, radius: f32) -> container::Style {
+pub fn settings_card(theme: &Theme, metrics: Metrics) -> container::Style {
     let colors = Colors::of(theme);
     let background = shade(colors.surface, theme, 0.08);
 
@@ -213,27 +222,33 @@ pub fn settings_card(theme: &Theme, radius: f32) -> container::Style {
         background: Some(Background::Color(background)),
         border: Border {
             color: colors.border,
-            width: 1.0,
-            radius: radius.into(),
+            width: metrics.line_width,
+            radius: metrics.large_radius.into(),
         },
         text_color: Some(colors.text),
         ..container::Style::default()
     }
 }
 
-pub fn settings_input(theme: &Theme, status: text_input::Status, radius: f32) -> text_input::Style {
+pub fn settings_input(
+    theme: &Theme,
+    status: text_input::Status,
+    metrics: Metrics,
+) -> text_input::Style {
     let mut style = text_input::default(theme, status);
-    style.border.radius = radius.into();
+    style.border.radius = metrics.small_radius.into();
+    style.border.width = metrics.line_width;
     style
 }
 
 pub fn settings_pick_list(
     theme: &Theme,
     status: pick_list::Status,
-    radius: f32,
+    metrics: Metrics,
 ) -> pick_list::Style {
     let mut style = pick_list::default(theme, status);
-    style.border.radius = radius.into();
+    style.border.radius = metrics.small_radius.into();
+    style.border.width = metrics.line_width;
     style
 }
 
@@ -241,7 +256,7 @@ pub fn settings_tab(
     theme: &Theme,
     status: button::Status,
     selected: bool,
-    radius: f32,
+    metrics: Metrics,
 ) -> button::Style {
     let colors = Colors::of(theme);
 
@@ -257,7 +272,7 @@ pub fn settings_tab(
         background,
         text_color: colors.text,
         border: Border {
-            radius: radius.into(),
+            radius: metrics.small_radius.into(),
             ..Border::default()
         },
         shadow: Default::default(),
@@ -265,7 +280,7 @@ pub fn settings_tab(
     }
 }
 
-pub fn settings_button(theme: &Theme, status: button::Status, radius: f32) -> button::Style {
+pub fn settings_button(theme: &Theme, status: button::Status, metrics: Metrics) -> button::Style {
     let colors = Colors::of(theme);
 
     let background = match status {
@@ -279,8 +294,8 @@ pub fn settings_button(theme: &Theme, status: button::Status, radius: f32) -> bu
         text_color: colors.text,
         border: Border {
             color: colors.border,
-            width: 1.0,
-            radius: radius.into(),
+            width: metrics.line_width,
+            radius: metrics.small_radius.into(),
         },
         shadow: Default::default(),
         snap: true,
@@ -290,7 +305,7 @@ pub fn settings_button(theme: &Theme, status: button::Status, radius: f32) -> bu
 pub fn settings_primary_button(
     theme: &Theme,
     status: button::Status,
-    radius: f32,
+    metrics: Metrics,
 ) -> button::Style {
     let colors = Colors::of(theme);
     let extended = theme.extended_palette();
@@ -305,7 +320,7 @@ pub fn settings_primary_button(
         background: Some(Background::Color(background)),
         text_color: extended.primary.base.text,
         border: Border {
-            radius: radius.into(),
+            radius: metrics.small_radius.into(),
             ..Border::default()
         },
         shadow: Default::default(),

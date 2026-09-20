@@ -3,6 +3,8 @@
   <span>atray</span>
 </h1>
 
+[![builds.sr.ht status](https://builds.sr.ht/~flamarine/atray/commits/trunk.svg)](https://builds.sr.ht/~flamarine/atray/commits/trunk?)
+
 ~~i probably should add an 's'~~
 
 Simple file relay tray; cross-platform alternative to [Yoink](https://eternalstorms.at/yoink/mac/).

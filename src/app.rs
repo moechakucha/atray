@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Side, TRAY_LENGTH, TRAY_THICKNESS, screen};
 use crate::input::{self, InputEvent};
-use crate::platform::DragHandler;
+use crate::platform::{DragHandler, WindowMaterial};
 use crate::theme;
 use crate::widget::FileChip;
 
@@ -298,8 +298,10 @@ pub enum Message {
     TooltipTick,
     SlideTick(Instant),
     Screen(screen::Message),
+    MaterialApplied,
     WindowCloseRequested(window::Id),
     WindowClosed(window::Id),
+    Placeholder,
 }
 
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
@@ -410,6 +412,32 @@ impl App {
         let (theme, metrics) = theme::resolve(self.config.appearance.theme, self.system_mode);
         self.theme = theme;
         self.metrics = metrics;
+    }
+
+    fn material(&self, material: WindowMaterial) -> Task<Message> {
+        let (window, radius) = match material {
+            WindowMaterial::Tray => (self.window_id, Some(self.metrics.large_radius)),
+            WindowMaterial::Settings => (self.config_window, None),
+        };
+
+        let Some(window) = window else {
+            return Task::none();
+        };
+
+        let dark = self
+            .theme
+            .as_ref()
+            .is_some_and(|theme| theme.extended_palette().is_dark);
+
+        crate::platform::apply_window_material(window, material, radius, dark)
+            .map(|()| Message::MaterialApplied)
+    }
+
+    fn materials(&self) -> Task<Message> {
+        Task::batch([
+            self.material(WindowMaterial::Tray),
+            self.material(WindowMaterial::Settings),
+        ])
     }
 
     pub fn add_from_location<P: AsRef<Path>>(
@@ -697,9 +725,9 @@ impl App {
         self.screen = Some(screen::Screen::from_config(&self.config));
 
         let (id, task) = window::open(screen::window_settings());
-        self.config_window = Some(id);
+        self.config_window = Some(id.clone());
 
-        task.discard()
+        task.chain(window::gain_focus(id)).discard()
     }
 
     fn save_config(&mut self) -> Task<Message> {
@@ -734,9 +762,9 @@ impl App {
         }
 
         if self.config.appearance.side == previous_side {
-            Task::none()
+            self.materials()
         } else {
-            self.restart_tray()
+            Task::batch([self.materials(), self.restart_tray()])
         }
     }
 
@@ -776,9 +804,7 @@ impl App {
         let colors = theme::Colors::of(&theme);
 
         match &self.screen {
-            Some(screen) => screen
-                .view(colors, self.metrics.card_radius)
-                .map(Message::Screen),
+            Some(screen) => screen.view(colors, self.metrics).map(Message::Screen),
             None => container(text("")).into(),
         }
     }
@@ -795,7 +821,7 @@ impl App {
                 .size(self.metrics.name_size)
                 .wrapping(Wrapping::WordOrGlyph),
         )
-        .style(theme::tooltip)
+        .style(move |theme| theme::tooltip(theme, self.metrics))
         .padding(theme::CARD_PADDING)
         .width(Length::Shrink)
         .height(Length::Shrink);
@@ -856,7 +882,7 @@ impl App {
                         Message::RelayScrolled(if horizontal { offset.x } else { offset.y })
                     }),
             )
-            .style(theme::surface)
+            .style(move |theme| theme::surface(theme, self.metrics))
             .padding(theme::VIEW_PADDING)
             .width(Length::Fill)
             .height(Length::Fill),
@@ -990,16 +1016,24 @@ impl App {
                 self.system_mode = mode;
                 self.refresh_theme();
 
-                Task::none()
+                self.materials()
             }
+            Message::MaterialApplied => Task::none(),
             Message::RelayOpened(id) => {
                 if self.tooltip_window == Some(id) {
                     return window::enable_mouse_passthrough(id);
                 }
 
+                if self.config_window == Some(id) {
+                    return self.material(WindowMaterial::Settings);
+                }
+
                 if self.window_id == Some(id) {
                     self.refresh_theme();
-                    return window::position(id).map(Message::RelayPositioned);
+                    return Task::batch([
+                        self.material(WindowMaterial::Tray),
+                        window::position(id).map(Message::RelayPositioned),
+                    ]);
                 }
 
                 Task::none()
@@ -1125,6 +1159,7 @@ impl App {
 
                 self.open_tooltip(hover.position)
             }
+            Message::Placeholder => Task::none(),
         }
     }
 

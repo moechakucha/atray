@@ -2,7 +2,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicIsize, Ordering},
     },
     time::{Duration, Instant},
@@ -15,9 +15,12 @@ use objc2::{
     runtime::{NSObject, NSObjectProtocol, ProtocolObject},
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSDragOperation, NSDraggingContext,
-    NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent, NSEventMask, NSImage,
-    NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSWorkspace,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+    NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
+    NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource,
+    NSEvent, NSEventMask, NSImage, NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL,
+    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
 };
 
 use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
@@ -32,9 +35,10 @@ use objc2_quick_look_thumbnailing::{
     QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
     QLThumbnailGenerator, QLThumbnailRepresentation,
 };
+use raw_window_handle::RawWindowHandle;
 
 use crate::input::{InputEvent, InputHandler, InputSink, Modifier, Modifiers, dispatch};
-use crate::platform::{DragHandler, DragSource, FileIcon};
+use crate::platform::{DragHandler, DragSource, FileIcon, WindowMaterial};
 
 type DragSourceHandle = Retained<ProtocolObject<dyn NSDraggingSource>>;
 
@@ -317,6 +321,129 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
 
 pub fn titlebar_inset() -> f32 {
     28.0
+}
+
+pub fn window_radius() -> f32 {
+    static RADIUS: OnceLock<f32> = OnceLock::new();
+
+    *RADIUS.get_or_init(|| {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return 0.0;
+        };
+
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0)),
+                NSWindowStyleMask::Titled,
+                NSBackingStoreType::Buffered,
+                false,
+            )
+        };
+
+        let radius: f64 = unsafe { msg_send![&window, _cornerRadius] };
+        let radius = radius as f32;
+
+        if radius.is_finite() && radius > 0.0 {
+            radius
+        } else {
+            0.0
+        }
+    })
+}
+
+pub fn apply_window_material(
+    window: iced::window::Id,
+    material: WindowMaterial,
+    radius: Option<f32>,
+    dark: bool,
+) -> iced::Task<()> {
+    iced::window::run(window, move |window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            return;
+        };
+
+        let view: &NSView = unsafe { &*handle.ns_view.as_ptr().cast() };
+
+        let Some(window) = view.window() else {
+            return;
+        };
+
+        set_window_material(&window, material, radius, dark);
+    })
+}
+
+fn set_window_material(
+    window: &NSWindow,
+    material: WindowMaterial,
+    radius: Option<f32>,
+    dark: bool,
+) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+
+    let Some(content) = window.contentView() else {
+        return;
+    };
+
+    let Some(frame) = (unsafe { content.superview() }) else {
+        return;
+    };
+
+    for view in frame.subviews().iter() {
+        if let Some(effect) = view.downcast_ref::<NSVisualEffectView>() {
+            configure_material(effect, material, radius, dark);
+            return;
+        }
+    }
+
+    let effect = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), content.frame());
+
+    effect.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+
+    frame.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(&content));
+
+    configure_material(&effect, material, radius, dark);
+}
+
+fn configure_material(
+    effect: &NSVisualEffectView,
+    material: WindowMaterial,
+    radius: Option<f32>,
+    dark: bool,
+) {
+    effect.setMaterial(match material {
+        WindowMaterial::Tray => NSVisualEffectMaterial::HUDWindow,
+        WindowMaterial::Settings => NSVisualEffectMaterial::WindowBackground,
+    });
+    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    effect.setState(NSVisualEffectState::Active);
+
+    if let Some(radius) = radius {
+        effect.setWantsLayer(true);
+
+        if let Some(layer) = effect.layer() {
+            layer.setCornerRadius(f64::from(radius));
+            layer.setMasksToBounds(true);
+        }
+    }
+
+    let name = if dark {
+        unsafe { NSAppearanceNameDarkAqua }
+    } else {
+        unsafe { NSAppearanceNameAqua }
+    };
+
+    if let Some(appearance) = NSAppearance::appearanceNamed(name) {
+        effect.setAppearance(Some(&appearance));
+    }
 }
 
 pub fn drag_source() -> Option<DragSource> {

@@ -22,7 +22,6 @@ const PANE_PADDING: f32 = 16.0;
 const ICON_RENDER_SIZE: f32 = 96.0;
 
 const ICON: &[u8] = include_bytes!("../../assets/icon.png");
-const LICENSE: &str = "GPLv3";
 const SOURCE: &str = "https://git.sr.ht/~flamarine/atray";
 const ISSUES: &str = "https://todo.sr.ht/~flamarine/atray";
 
@@ -213,14 +212,14 @@ impl Screen {
         self.error = None;
     }
 
-    pub fn view(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
-        let sidebar = container(self.sidebar(radius))
+    pub fn view(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
+        let sidebar = container(self.sidebar(metrics))
             .style(theme::settings_sidebar)
             .width(SIDEBAR_WIDTH)
             .height(Length::Fill);
 
         let pane = scrollable(
-            container(self.pane(colors, radius))
+            container(self.pane(colors, metrics))
                 .width(Length::Fill)
                 .padding(Padding {
                     top: crate::platform::titlebar_inset() + PANE_PADDING,
@@ -232,7 +231,7 @@ impl Screen {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let body = column(vec![pane.into(), self.footer(colors, radius)])
+        let body = column(vec![pane.into(), self.footer(colors, metrics)])
             .width(Length::Fill)
             .height(Length::Fill);
 
@@ -247,10 +246,10 @@ impl Screen {
             .into()
     }
 
-    fn sidebar(&self, radius: f32) -> Element<'_, Message> {
+    fn sidebar(&self, metrics: theme::Metrics) -> Element<'_, Message> {
         let tabs: Vec<Element<'_, Message>> = Tab::ALL
             .iter()
-            .map(|tab| self.tab_button(*tab, radius))
+            .map(|tab| self.tab_button(*tab, metrics))
             .collect();
 
         column(tabs)
@@ -264,7 +263,7 @@ impl Screen {
             .into()
     }
 
-    fn tab_button(&self, tab: Tab, radius: f32) -> Element<'_, Message> {
+    fn tab_button(&self, tab: Tab, metrics: theme::Metrics) -> Element<'_, Message> {
         let selected = self.tab == tab;
 
         button(
@@ -275,20 +274,24 @@ impl Screen {
         .width(Length::Fill)
         .padding([6, 10])
         .on_press(Message::Tab(tab))
-        .style(move |theme, status| theme::settings_tab(theme, status, selected, radius))
+        .style(move |theme, status| theme::settings_tab(theme, status, selected, metrics))
         .into()
     }
 
-    fn pane(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn pane(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
         match self.tab {
-            Tab::Behavior => self.behavior_pane(colors, radius),
-            Tab::Appearance => self.appearance_pane(colors, radius),
-            Tab::Advanced => self.advanced_pane(colors, radius),
-            Tab::About => self.about_pane(colors, radius),
+            Tab::Behavior => self.behavior_pane(colors, metrics),
+            Tab::Appearance => self.appearance_pane(colors, metrics),
+            Tab::Advanced => self.advanced_pane(colors, metrics),
+            Tab::About => self.about_pane(colors, metrics),
         }
     }
 
-    fn behavior_pane(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn behavior_pane(
+        &self,
+        colors: theme::Colors,
+        metrics: theme::Metrics,
+    ) -> Element<'_, Message> {
         let mut items: Vec<Element<'_, Message>> = vec![
             note("Copy and move", colors),
             card(
@@ -302,7 +305,7 @@ impl Screen {
                             |label| Message::MoveModifier(modifier_of(label)),
                         )
                         .style(move |theme, status| {
-                            theme::settings_pick_list(theme, status, radius)
+                            theme::settings_pick_list(theme, status, metrics)
                         })
                         .width(Length::Fixed(CONTROL_WIDTH))
                         .into(),
@@ -317,7 +320,7 @@ impl Screen {
                         colors,
                     ),
                 ],
-                radius,
+                metrics,
             ),
             note("Source filter", colors),
             note(
@@ -329,13 +332,13 @@ impl Screen {
         ];
 
         for (index, rule) in self.rules.iter().enumerate() {
-            items.push(self.rule_card(index, rule, colors, radius));
+            items.push(self.rule_card(index, rule, colors, metrics));
         }
 
         items.push(
             button(text("Add rule").size(LABEL_SIZE))
                 .on_press(Message::RuleAdd)
-                .style(move |theme, status| theme::settings_button(theme, status, radius))
+                .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([6, 12])
                 .into(),
         );
@@ -348,14 +351,14 @@ impl Screen {
         index: usize,
         rule: &RuleDraft,
         colors: theme::Colors,
-        radius: f32,
+        metrics: theme::Metrics,
     ) -> Element<'_, Message> {
         let header = row(vec![
             text(format!("Rule {}", index + 1)).size(LABEL_SIZE).into(),
             space().width(Length::Fill).into(),
             button(text("Remove").size(NOTE_SIZE))
                 .on_press(Message::RuleRemove(index))
-                .style(move |theme, status| theme::settings_button(theme, status, radius))
+                .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([4, 10])
                 .into(),
         ])
@@ -369,7 +372,7 @@ impl Screen {
                     "Matched against the name of the app the drag started from.",
                     text_input("", &rule.app)
                         .on_input(move |value| Message::RuleApp(index, value))
-                        .style(move |theme, status| theme::settings_input(theme, status, radius))
+                        .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(CONTROL_WIDTH))
                         .into(),
                     colors,
@@ -379,7 +382,7 @@ impl Screen {
                     "Matched against the title of the window the drag started from.",
                     text_input("", &rule.title)
                         .on_input(move |value| Message::RuleTitle(index, value))
-                        .style(move |theme, status| theme::settings_input(theme, status, radius))
+                        .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(CONTROL_WIDTH))
                         .into(),
                     colors,
@@ -392,17 +395,21 @@ impl Screen {
                         Some(action_label(rule.action)),
                         move |label| Message::RuleAction(index, action_of(label)),
                     )
-                    .style(move |theme, status| theme::settings_pick_list(theme, status, radius))
+                    .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
                     .into(),
                     colors,
                 ),
             ],
-            radius,
+            metrics,
         )
     }
 
-    fn appearance_pane(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn appearance_pane(
+        &self,
+        colors: theme::Colors,
+        metrics: theme::Metrics,
+    ) -> Element<'_, Message> {
         column(vec![
             note("Window", colors),
             card(
@@ -412,12 +419,12 @@ impl Screen {
                     pick_list(&SIDE_LABELS[..], Some(side_label(self.side)), |label| {
                         Message::Side(side_of(label))
                     })
-                    .style(move |theme, status| theme::settings_pick_list(theme, status, radius))
+                    .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
                     .into(),
                     colors,
                 )],
-                radius,
+                metrics,
             ),
             note("Theme", colors),
             card(
@@ -427,19 +434,23 @@ impl Screen {
                     pick_list(&THEME_LABELS[..], Some(theme_label(self.theme)), |label| {
                         Message::Theme(theme_of(label))
                     })
-                    .style(move |theme, status| theme::settings_pick_list(theme, status, radius))
+                    .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
                     .into(),
                     colors,
                 )],
-                radius,
+                metrics,
             ),
         ])
         .spacing(12)
         .into()
     }
 
-    fn advanced_pane(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn advanced_pane(
+        &self,
+        colors: theme::Colors,
+        metrics: theme::Metrics,
+    ) -> Element<'_, Message> {
         column(vec![
             note("Cache", colors),
             card(
@@ -448,12 +459,12 @@ impl Screen {
                     "Where files are kept after they are moved into the tray.",
                     text_input("", &self.cache_dir)
                         .on_input(Message::CacheDir)
-                        .style(move |theme, status| theme::settings_input(theme, status, radius))
+                        .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(WIDE_CONTROL_WIDTH))
                         .into(),
                     colors,
                 )],
-                radius,
+                metrics,
             ),
             note(
                 "Leave empty to keep moved files in a temporary directory that is deleted \
@@ -465,7 +476,7 @@ impl Screen {
         .into()
     }
 
-    fn about_pane(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn about_pane(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
         let mut header: Vec<Element<'_, Message>> = Vec::new();
 
         if let Some(icon) = &self.icon {
@@ -488,6 +499,17 @@ impl Screen {
         );
         header.push(
             container(
+                text(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                    .size(NOTE_SIZE)
+                    .color(colors.note())
+                    .wrapping(Wrapping::Word),
+            )
+            .center_x(Length::Fill)
+            .padding([0.0, 24.0])
+            .into(),
+        );
+        header.push(
+            container(
                 text(env!("CARGO_PKG_DESCRIPTION"))
                     .size(NOTE_SIZE)
                     .color(colors.note())
@@ -498,29 +520,20 @@ impl Screen {
             .into(),
         );
 
-        let rows = card(
-            vec![
-                setting_row(
-                    "Version",
-                    "",
-                    text(env!("CARGO_PKG_VERSION")).size(LABEL_SIZE).into(),
-                    colors,
-                ),
-                setting_row("License", "", text(LICENSE).size(LABEL_SIZE).into(), colors),
-            ],
-            radius,
-        );
-
         column(vec![
             column(header).spacing(6).into(),
-            rows.into(),
-            link_buttons(radius).into(),
+            link_buttons(metrics).into(),
+            note(
+                "© 2026 moechakucha. Licensed under the GNU General Public License v3.0.",
+                colors,
+            )
+            .into(),
         ])
         .spacing(20)
         .into()
     }
 
-    fn footer(&self, colors: theme::Colors, radius: f32) -> Element<'_, Message> {
+    fn footer(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
         let status: Element<'_, Message> = match &self.error {
             Some(error) => text(error.as_str())
                 .size(NOTE_SIZE)
@@ -532,12 +545,12 @@ impl Screen {
         let buttons = row(vec![
             button(text("Revert").size(LABEL_SIZE))
                 .on_press(Message::Revert)
-                .style(move |theme, status| theme::settings_button(theme, status, radius))
+                .style(move |theme, status| theme::settings_button(theme, status, metrics))
                 .padding([6, 12])
                 .into(),
             button(text("Save").size(LABEL_SIZE))
                 .on_press(Message::Save)
-                .style(move |theme, status| theme::settings_primary_button(theme, status, radius))
+                .style(move |theme, status| theme::settings_primary_button(theme, status, metrics))
                 .padding([6, 12])
                 .into(),
         ])
@@ -563,26 +576,26 @@ pub fn window_settings() -> window::Settings {
         position: window::Position::Centered,
         resizable: false,
         transparent: true,
-        blur: true,
+        blur: false,
         platform_specific: crate::platform::platform_window_settings(),
         exit_on_close_request: false,
         ..Default::default()
     }
 }
 
-fn card<'a>(rows: Vec<Element<'a, Message>>, radius: f32) -> Element<'a, Message> {
+fn card<'a>(rows: Vec<Element<'a, Message>>, metrics: theme::Metrics) -> Element<'a, Message> {
     let mut column = Column::new().spacing(0);
 
     for (index, item) in rows.into_iter().enumerate() {
         if index > 0 {
-            column = column.push(rule::horizontal(1.0));
+            column = column.push(rule::horizontal(metrics.line_width));
         }
 
         column = column.push(item);
     }
 
     container(column)
-        .style(move |theme| theme::settings_card(theme, radius))
+        .style(move |theme| theme::settings_card(theme, metrics))
         .padding([4, 12])
         .width(Length::Fill)
         .into()
@@ -697,16 +710,16 @@ fn action_of(label: &str) -> FilterAction {
     }
 }
 
-fn link_buttons<'a>(radius: f32) -> Element<'a, Message> {
+fn link_buttons<'a>(metrics: theme::Metrics) -> Element<'a, Message> {
     row![
         button(text("Source").align_x(iced::alignment::Horizontal::Center))
             .on_press(Message::OpenLink(SOURCE))
             .width(Length::Fill)
-            .style(move |theme, status| theme::settings_button(theme, status, radius)),
+            .style(move |theme, status| theme::settings_button(theme, status, metrics)),
         button(text("Issues").align_x(iced::alignment::Horizontal::Center))
             .on_press(Message::OpenLink(ISSUES))
             .width(Length::Fill)
-            .style(move |theme, status| theme::settings_button(theme, status, radius))
+            .style(move |theme, status| theme::settings_button(theme, status, metrics))
     ]
     .spacing(6)
     .width(Length::Fill)

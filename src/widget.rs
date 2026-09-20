@@ -61,7 +61,7 @@ impl Geometry {
             gap: metrics.icon_gap * scale,
             name: metrics.name_size * scale,
             line_height_factor: metrics.line_height,
-            radius: metrics.card_radius * scale,
+            radius: metrics.small_radius * scale,
         }
     }
 

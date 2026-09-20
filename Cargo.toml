@@ -49,19 +49,25 @@ objc2-core-graphics = { version = "0.3", features = [
     "CGImage",
 ] }
 objc2-foundation = "0.3"
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
 objc2-quick-look-thumbnailing = "0.3"
 objc2-app-kit = { version = "0.3", features = [
+    "NSAppearance",
     "NSDragging",
     "NSDraggingItem",
     "NSDraggingSession",
     "NSEvent",
+    "NSGraphics",
     "NSImage",
     "NSPasteboard",
+    "NSResponder",
     "NSRunningApplication",
     "NSView",
+    "NSVisualEffectView",
     "NSWindow",
     "NSWorkspace",
 ] }
+raw-window-handle = "0.6"
 
 [workspace]
 members = [".", "xtask"]
