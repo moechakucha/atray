@@ -122,8 +122,6 @@ impl DeferredFile {
 
         let original = path;
 
-        let icon = icon_for(&original);
-
         let ownership = if should_move {
             match cache_path {
                 Some(cache_path) => {
@@ -164,20 +162,19 @@ impl DeferredFile {
             ownership,
             file_size: metadata.len(),
             last_modified: metadata.modified()?,
-            icon,
+            icon: None,
         })
     }
 
     fn from_cache(path: PathBuf, metadata: CacheMetadata) -> std::io::Result<Self> {
         let file_metadata = std::fs::metadata(&path)?;
-        let icon = icon_for(&path);
 
         Ok(Self {
             file_name: metadata.display_name(&path),
             ownership: Ownership::Owned(OwnedPath::Configured(path)),
             file_size: file_metadata.len(),
             last_modified: file_metadata.modified()?,
-            icon,
+            icon: None,
         })
     }
 
@@ -204,9 +201,15 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_else(|| i18n::t("file-unknown-name"))
 }
 
-fn icon_for(path: &Path) -> Option<image::Handle> {
-    crate::platform::file_icon(path, (theme::ICON_SIZE * 2.0).round() as u32)
-        .map(|icon| image::Handle::from_rgba(icon.width, icon.height, icon.rgba))
+fn icon_task(path: PathBuf) -> Task<Message> {
+    let size = (theme::ICON_SIZE * 2.0).round() as u32;
+
+    crate::platform::file_icon_task(path.clone(), size)
+        .map(move |icon| Message::FileIconLoaded(path.clone(), icon_handle(icon)))
+}
+
+fn icon_handle(icon: Option<crate::platform::FileIcon>) -> Option<image::Handle> {
+    icon.map(|icon| image::Handle::from_rgba(icon.width, icon.height, icon.rgba))
 }
 
 fn metadata_path(path: &Path) -> PathBuf {
@@ -375,6 +378,7 @@ pub enum Message {
     FileDropped(PathBuf),
     FileSelectionToggled(usize),
     FileTakenOut(usize),
+    FileIconLoaded(PathBuf, Option<image::Handle>),
     PollDragResult,
     TrayMenuClicked(String),
     SystemThemeChanged(iced::theme::Mode),
@@ -430,6 +434,7 @@ struct TooltipHover {
 pub struct App {
     config: config::Config,
     file_relay: Vec<DeferredFile>,
+    pending_icons: HashSet<PathBuf>,
     window_id: Option<window::Id>,
     drag_handler: Box<dyn DragHandler>,
     dragging: Option<Vec<usize>>,
@@ -460,6 +465,7 @@ impl App {
         let mut app = Self {
             config,
             file_relay,
+            pending_icons: HashSet::new(),
             window_id: None,
             drag_handler: crate::platform::get_drag_handler(),
             dragging: None,
@@ -482,10 +488,12 @@ impl App {
 
         app.read_autostart();
 
+        let icons = app.load_icons();
+
         let task = if app.file_relay.is_empty() {
-            Task::none()
+            icons
         } else {
-            app.open_tray()
+            Task::batch([icons, app.open_tray()])
         };
 
         (app, task)
@@ -538,6 +546,27 @@ impl App {
             self.material(WindowMaterial::Tray),
             self.material(WindowMaterial::Settings),
         ])
+    }
+
+    fn load_icons(&mut self) -> Task<Message> {
+        let paths: Vec<PathBuf> = self
+            .file_relay
+            .iter()
+            .filter(|file| file.icon.is_none())
+            .map(|file| file.path().clone())
+            .collect();
+
+        let tasks: Vec<Task<Message>> = paths
+            .into_iter()
+            .filter(|path| self.pending_icons.insert(path.clone()))
+            .map(icon_task)
+            .collect();
+
+        if tasks.is_empty() {
+            return Task::none();
+        }
+
+        Task::batch(tasks)
     }
 
     pub fn add_from_location<P: AsRef<Path>>(
@@ -1155,6 +1184,17 @@ impl App {
 
                 Task::none()
             }
+            Message::FileIconLoaded(path, icon) => {
+                self.pending_icons.remove(&path);
+
+                for file in &mut self.file_relay {
+                    if file.path() == &path {
+                        file.icon = icon.clone();
+                    }
+                }
+
+                Task::none()
+            }
             Message::PollDragResult => Task::none(),
             Message::FileHovered => {
                 self.hovered = true;
@@ -1203,11 +1243,14 @@ impl App {
                 } else {
                     Some(PathBuf::from(cache_dir))
                 };
-                if let Err(err) = self.add_from_location(path.clone(), cache_path, should_move) {
-                    eprintln!("failed to add {path:?}: {err}");
-                }
 
-                Task::none()
+                match self.add_from_location(path.clone(), cache_path, should_move) {
+                    Ok(()) => self.load_icons(),
+                    Err(err) => {
+                        eprintln!("failed to add {path:?}: {err}");
+                        Task::none()
+                    }
+                }
             }
             Message::TrayMenuClicked(id) => {
                 return match id.as_str() {

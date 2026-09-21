@@ -101,6 +101,11 @@ pub fn file_icon(_path: &std::path::Path, _size: u32) -> Option<FileIcon> {
     None
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn file_icon_task(_path: PathBuf, _size: u32) -> iced::Task<Option<FileIcon>> {
+    iced::Task::done(None)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowMaterial {
     Tray,

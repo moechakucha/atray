@@ -518,6 +518,10 @@ pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {
     quicklook_thumbnail(path, size).or_else(|| workspace_icon(path, size))
 }
 
+pub fn file_icon_task(path: PathBuf, size: u32) -> iced::Task<Option<FileIcon>> {
+    iced::Task::done(file_icon(&path, size))
+}
+
 fn workspace_icon(path: &Path, size: u32) -> Option<FileIcon> {
     let workspace = NSWorkspace::sharedWorkspace();
     let image = workspace.iconForFile(&NSString::from_str(&path.to_string_lossy()));

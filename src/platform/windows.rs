@@ -31,9 +31,9 @@ use windows::{
         },
         System::{
             Com::{
-                DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject,
-                IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, IEnumSTATDATA, STGMEDIUM,
-                STGMEDIUM_0, TYMED_HGLOBAL,
+                COINIT_APARTMENTTHREADED, CoInitializeEx, DATADIR_GET, DVASPECT_CONTENT, FORMATETC,
+                IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl,
+                IEnumSTATDATA, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
             },
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
             Ole::{
@@ -391,12 +391,34 @@ fn key_down(key: VIRTUAL_KEY) -> bool {
 }
 
 pub fn file_icon(path: &Path, size: u32) -> Option<FileIcon> {
+    if !com_ready() {
+        return None;
+    }
+
     let size = size.max(1);
 
     let image = shell_image(path, size, SIIGBF_THUMBNAILONLY)
         .or_else(|| shell_image(path, size, SIIGBF_ICONONLY))?;
 
     Some(icon_canvas(image, size))
+}
+
+pub fn file_icon_task(path: PathBuf, size: u32) -> iced::Task<Option<FileIcon>> {
+    iced::Task::perform(async move { file_icon(&path, size) }, |icon| icon)
+}
+
+fn com_ready() -> bool {
+    std::thread_local! {
+        static READY: bool = match unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok() {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("failed to initialize com for icon loading: {error}");
+                false
+            }
+        };
+    }
+
+    READY.with(|ready| *ready)
 }
 
 fn shell_image(path: &Path, size: u32, kind: SIIGBF) -> Option<image::RgbaImage> {
@@ -497,8 +519,9 @@ fn bitmap_image(bitmap: &HBITMAP) -> Option<image::RgbaImage> {
 }
 
 fn icon_canvas(source: image::RgbaImage, size: u32) -> FileIcon {
-    let scaled =
-        image::imageops::resize(&source, size, size, image::imageops::FilterType::Lanczos3);
+    let scaled = image::DynamicImage::ImageRgba8(source)
+        .resize(size, size, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
     let mut canvas = image::RgbaImage::new(size, size);
     let x = ((size - scaled.width()) / 2) as i64;
     let y = ((size - scaled.height()) / 2) as i64;
