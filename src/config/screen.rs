@@ -28,12 +28,15 @@ const ICON: &[u8] = include_bytes!("../../assets/icon.png");
 const SOURCE: &str = "https://git.sr.ht/~flamarine/atray";
 const ISSUES: &str = "https://todo.sr.ht/~flamarine/atray";
 
+#[cfg(not(target_os = "windows"))]
 const MODIFIERS: [Modifier; 4] = [
     Modifier::Alt,
     Modifier::Control,
     Modifier::Shift,
     Modifier::Super,
 ];
+#[cfg(target_os = "windows")]
+const MODIFIERS: [Modifier; 3] = [Modifier::Alt, Modifier::Control, Modifier::Shift];
 const SIDES: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
 const THEMES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
 const ACTIONS: [FilterAction; 2] = [FilterAction::Allow, FilterAction::Deny];
