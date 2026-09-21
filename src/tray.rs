@@ -27,6 +27,8 @@ pub fn build() -> anyhow::Result<TrayIcon> {
 
     TRAY.with(|slot| *slot.borrow_mut() = Some(tray.clone()));
 
+    log::info!("tray icon created");
+
     Ok(tray)
 }
 
@@ -34,7 +36,7 @@ pub fn relocalize() {
     let menu = match menu() {
         Ok(menu) => menu,
         Err(err) => {
-            eprintln!("failed to build tray menu: {err}");
+            log::error!("failed to build tray menu: {err}");
             return;
         }
     };

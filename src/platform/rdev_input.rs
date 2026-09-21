@@ -31,7 +31,7 @@ impl RdevInputHandler {
             });
 
             if let Err(err) = result {
-                eprintln!("Error when listening rdev events: {err:?}");
+                log::error!("failed to listen for rdev events: {err:?}");
             }
         });
 

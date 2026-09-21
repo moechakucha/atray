@@ -620,6 +620,7 @@ dependencies = [
  "font-kit",
  "iced",
  "image",
+ "log",
  "native-theme",
  "native-theme-iced",
  "objc2 0.6.4",

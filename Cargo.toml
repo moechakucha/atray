@@ -23,6 +23,7 @@ fluent-templates = "0.15"
 font-kit = "0.14"
 iced = { version = "0.14", features = ["advanced", "image"] }
 image = "0.25"
+log = "0.4"
 native-theme-iced = "0.5"
 open = "5"
 regex = "1"

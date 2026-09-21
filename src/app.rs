@@ -153,7 +153,7 @@ impl DeferredFile {
 
         if should_move {
             if let Err(err) = std::fs::remove_file(&original) {
-                eprintln!("failed to remove original {original:?}: {err}");
+                log::error!("failed to remove original {}: {err}", original.display());
             }
         }
 
@@ -240,13 +240,19 @@ fn write_metadata(path: &Path, metadata: &CacheMetadata) {
     let content = match toml::to_string_pretty(metadata) {
         Ok(content) => content,
         Err(err) => {
-            eprintln!("failed to serialize cache metadata for {path:?}: {err}");
+            log::error!(
+                "failed to serialize cache metadata for {}: {err}",
+                path.display()
+            );
             return;
         }
     };
 
     if let Err(err) = std::fs::write(metadata_path(path), content) {
-        eprintln!("failed to write cache metadata for {path:?}: {err}");
+        log::error!(
+            "failed to write cache metadata for {}: {err}",
+            path.display()
+        );
     }
 }
 
@@ -276,13 +282,13 @@ fn write_session(config_path: &Path, files: &[SessionEntry]) {
     }) {
         Ok(content) => content,
         Err(err) => {
-            eprintln!("failed to serialize session: {err}");
+            log::error!("failed to serialize session: {err}");
             return;
         }
     };
 
     if let Err(err) = std::fs::write(session_path(config_path), content) {
-        eprintln!("failed to write session: {err}");
+        log::error!("failed to write session: {err}");
     }
 }
 
@@ -409,7 +415,7 @@ const TOOLTIP_HEIGHT: f32 = 240.0;
 const TOOLTIP_GAP: f32 = 4.0;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(350);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayState {
     Hidden,
     Peek,
@@ -487,6 +493,8 @@ impl App {
         };
 
         app.read_autostart();
+
+        log::info!("session: restored {} file(s)", app.file_relay.len());
 
         let icons = app.load_icons();
 
@@ -576,6 +584,14 @@ impl App {
         should_move: bool,
     ) -> std::io::Result<()> {
         let file = DeferredFile::new(path, cache_path.as_ref(), should_move)?;
+
+        log::info!(
+            "added {} ({} bytes), {} in the tray",
+            file.path().display(),
+            file.file_size,
+            self.file_relay.len() + 1
+        );
+
         self.file_relay.push(file);
         self.save_session();
         Ok(())
@@ -599,7 +615,7 @@ impl App {
                 }?;
 
                 if entry.path.to_str().is_none() {
-                    eprintln!(
+                    log::warn!(
                         "session: skipping {} because its path is not valid UTF-8",
                         entry.path.display()
                     );
@@ -609,6 +625,8 @@ impl App {
                 Some(entry)
             })
             .collect();
+
+        log::debug!("session: saving {} file(s)", files.len());
 
         write_session(self.config.path(), &files);
     }
@@ -654,8 +672,11 @@ impl App {
         };
 
         if !self.drag_handler.start_drag(&paths, effect) {
+            log::warn!("failed to start the drag session");
             return false;
         }
+
+        log::info!("dragging out {} file(s) ({effect:?})", paths.len());
 
         self.discard_lingering();
         self.dragging = Some(indices);
@@ -677,6 +698,10 @@ impl App {
             |index: usize| index - missing.iter().filter(|&&removed| removed < index).count();
 
         for &index in missing.iter().rev() {
+            log::info!(
+                "dropping missing file: {}",
+                self.file_relay[index].path().display()
+            );
             self.file_relay.remove(index).discard();
         }
 
@@ -697,6 +722,8 @@ impl App {
         let Some(indices) = self.dragging.take() else {
             return;
         };
+
+        log::info!("drag ended: success={success}, {} item(s)", indices.len());
 
         if !success {
             return;
@@ -725,6 +752,8 @@ impl App {
         self.position = Point::ORIGIN;
         self.scroll_offset = 0.0;
 
+        log::info!("tray window opened: {id:?}");
+
         task.discard()
     }
 
@@ -735,6 +764,8 @@ impl App {
     }
 
     fn restart_tray(&mut self) -> Task<Message> {
+        log::debug!("restarting the tray window");
+
         let tooltip = self.close_tooltip();
         self.tooltip_hover = None;
 
@@ -767,8 +798,11 @@ impl App {
         }
 
         if !self.source_allowed() {
+            log::debug!("ignoring drag: source does not match the filter");
             return Task::none();
         }
+
+        log::debug!("drag detected from {:?}", crate::platform::drag_source());
 
         self.open_tray()
     }
@@ -838,6 +872,9 @@ impl App {
         }
 
         let state = self.tray_state();
+
+        log::debug!("tray state: {state:?}");
+
         let Some(target) = self.tray_point(state) else {
             return Task::none();
         };
@@ -937,6 +974,8 @@ impl App {
         let (id, task) = window::open(screen::window_settings());
         self.config_window = Some(id.clone());
 
+        log::info!("settings window opened: {id:?}");
+
         task.chain(window::gain_focus(id)).discard()
     }
 
@@ -948,6 +987,8 @@ impl App {
         let mut config = self.config.clone();
 
         if let Err(error) = screen.apply(&mut config) {
+            log::warn!("invalid settings: {error}");
+
             if let Some(screen) = &mut self.screen {
                 screen.set_error(error);
             }
@@ -956,6 +997,8 @@ impl App {
         }
 
         if let Err(error) = config.save_to_original() {
+            log::error!("failed to save config: {error}");
+
             if let Some(screen) = &mut self.screen {
                 screen.set_error(i18n::t_args(
                     "error-save-config",
@@ -971,6 +1014,8 @@ impl App {
         self.config = config;
         self.refresh_theme();
         self.save_session();
+
+        log::info!("settings saved to {}", self.config.path().display());
 
         if self.config.appearance.language != previous_language {
             self.relocalize();
@@ -1003,9 +1048,10 @@ impl App {
         }
 
         self.config.advanced.launch_at_login = enabled;
+        log::info!("launch at login: {enabled}");
 
         if let Err(err) = self.config.save_to_original() {
-            eprintln!("failed to save config: {err}");
+            log::error!("failed to save config: {err}");
         }
     }
 
@@ -1026,6 +1072,8 @@ impl App {
             screen::Message::Revert => {
                 let restored = screen::Screen::from_config(&self.config);
                 self.screen = Some(restored);
+
+                log::debug!("settings reverted");
 
                 Task::none()
             }
@@ -1151,6 +1199,13 @@ impl App {
 
         match message {
             Message::PointerPressed => {
+                log::trace!(
+                    "pointer pressed (window={}, dragging={}, hovered={})",
+                    self.window_id.is_some(),
+                    self.dragging.is_some(),
+                    self.hovered
+                );
+
                 if self.dragging.is_some() {
                     self.finish_drag(false);
                     self.drag_handler.cancel_pending_drag();
@@ -1163,6 +1218,8 @@ impl App {
                 Task::batch([tooltip, self.try_open_relay()])
             }
             Message::PointerReleased => {
+                log::trace!("pointer released");
+
                 self.drag_handler.cancel_pending_drag();
                 Task::none()
             }
@@ -1187,6 +1244,8 @@ impl App {
             Message::FileIconLoaded(path, icon) => {
                 self.pending_icons.remove(&path);
 
+                log::debug!("icon loaded for {}: {}", path.display(), icon.is_some());
+
                 for file in &mut self.file_relay {
                     if file.path() == &path {
                         file.icon = icon.clone();
@@ -1197,10 +1256,14 @@ impl App {
             }
             Message::PollDragResult => Task::none(),
             Message::FileHovered => {
+                log::debug!("files hovered over the tray");
+
                 self.hovered = true;
                 Task::none()
             }
             Message::FileHoveredLeft => {
+                log::debug!("files left the tray");
+
                 self.hovered = false;
                 Task::none()
             }
@@ -1212,6 +1275,8 @@ impl App {
                 }
 
                 if let Some(index) = self.lingering.iter().position(|file| file.path() == &path) {
+                    log::info!("{} was dropped back onto the tray", path.display());
+
                     self.file_relay.push(self.lingering.remove(index));
                     self.save_session();
                     return Task::none();
@@ -1232,6 +1297,10 @@ impl App {
                 }
 
                 if !self.source_allowed() {
+                    log::info!(
+                        "ignoring {}: source does not match the filter",
+                        path.display()
+                    );
                     return Task::none();
                 }
 
@@ -1247,12 +1316,14 @@ impl App {
                 match self.add_from_location(path.clone(), cache_path, should_move) {
                     Ok(()) => self.load_icons(),
                     Err(err) => {
-                        eprintln!("failed to add {path:?}: {err}");
+                        log::error!("failed to add {}: {err}", path.display());
                         Task::none()
                     }
                 }
             }
             Message::TrayMenuClicked(id) => {
+                log::info!("tray menu: {id}");
+
                 return match id.as_str() {
                     "quit" => {
                         self.discard_lingering();
@@ -1275,7 +1346,7 @@ impl App {
                         }
 
                         if let Some(error) = self.apply_autostart() {
-                            eprintln!("{error}");
+                            log::error!("{error}");
                         }
 
                         if self.config.appearance.side == previous_side {
@@ -1289,6 +1360,8 @@ impl App {
                 };
             }
             Message::SystemThemeChanged(mode) => {
+                log::info!("system theme changed: {mode:?}");
+
                 self.system_mode = mode;
                 self.refresh_theme();
 
@@ -1383,6 +1456,8 @@ impl App {
                 Task::none()
             }
             Message::WindowClosed(id) => {
+                log::debug!("window closed: {id:?}");
+
                 if self.config_window == Some(id) {
                     self.config_window = None;
                     self.screen = None;

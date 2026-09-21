@@ -59,6 +59,8 @@ pub fn system() -> Option<Font> {
         .ok()
         .map(|(_, resolved, _)| native_theme_iced::font_family(&resolved).to_owned());
 
+    log::debug!("native theme font: {active:?}");
+
     let detected = active.as_deref().and_then(|active| {
         CANDIDATES.iter().find(|candidate| {
             candidate
@@ -74,9 +76,15 @@ pub fn system() -> Option<Font> {
 }
 
 fn load(candidate: &Candidate) -> Option<Font> {
-    let path = findfont::find(candidate.stem)?;
+    let Some(path) = findfont::find(candidate.stem) else {
+        log::debug!("font not installed: {}", candidate.stem);
+        return None;
+    };
+
     let loaded = LoadedFont::from_path(&path, 0).ok()?;
     let family: &'static str = Box::leak(loaded.family_name().into_boxed_str());
+
+    log::info!("font: {family} ({})", path.display());
 
     Some(Font::with_name(family))
 }

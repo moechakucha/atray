@@ -56,8 +56,8 @@ use windows::{
                 SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
             },
             WindowsAndMessaging::{
-                FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, SMTO_ABORTIFHUNG,
-                SendMessageTimeoutW, WM_GETTEXT,
+                FindWindowW, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
+                SM_CXSMICON, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_GETTEXT,
             },
         },
     },
@@ -95,6 +95,10 @@ pub fn window_radius() -> f32 {
     WINDOW_RADIUS
 }
 
+pub fn window_icon_size() -> u32 {
+    unsafe { GetSystemMetrics(SM_CXSMICON) }.clamp(16, 256) as u32
+}
+
 pub fn apply_window_material(
     window: iced::window::Id,
     material: WindowMaterial,
@@ -116,16 +120,38 @@ pub fn apply_window_material(
             WindowMaterial::Settings => DWMSBT_MAINWINDOW,
         };
 
+        log::debug!("applying {material:?} material (dark={dark})");
+
         unsafe {
-            set_window_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &BOOL::from(dark));
-            set_window_attribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &DWMWCP_ROUND);
-            set_window_attribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop);
+            set_window_attribute(
+                hwnd,
+                "DWMWA_USE_IMMERSIVE_DARK_MODE",
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &BOOL::from(dark),
+            );
+            set_window_attribute(
+                hwnd,
+                "DWMWA_WINDOW_CORNER_PREFERENCE",
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &DWMWCP_ROUND,
+            );
+            set_window_attribute(
+                hwnd,
+                "DWMWA_SYSTEMBACKDROP_TYPE",
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &backdrop,
+            );
         }
     })
 }
 
-unsafe fn set_window_attribute<T>(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: &T) {
-    let _ = unsafe {
+unsafe fn set_window_attribute<T>(
+    hwnd: HWND,
+    name: &str,
+    attribute: DWMWINDOWATTRIBUTE,
+    value: &T,
+) {
+    let result = unsafe {
         DwmSetWindowAttribute(
             hwnd,
             attribute,
@@ -133,6 +159,10 @@ unsafe fn set_window_attribute<T>(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, val
             size_of::<T>() as u32,
         )
     };
+
+    if let Err(error) = result {
+        log::warn!("failed to set {name}: {error}");
+    }
 }
 
 pub struct WindowsDragHandler {
@@ -307,7 +337,7 @@ fn preferred_ui_languages() -> Vec<String> {
         if let Err(error) =
             GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut length)
         {
-            eprintln!("failed to query preferred ui languages: {error}");
+            log::warn!("failed to query preferred ui languages: {error}");
             return Vec::new();
         }
 
@@ -323,7 +353,7 @@ fn preferred_ui_languages() -> Vec<String> {
             Some(PWSTR(buffer.as_mut_ptr())),
             &mut length,
         ) {
-            eprintln!("failed to read preferred ui languages: {error}");
+            log::warn!("failed to read preferred ui languages: {error}");
             return Vec::new();
         }
 
@@ -412,7 +442,7 @@ fn com_ready() -> bool {
         static READY: bool = match unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok() {
             Ok(()) => true,
             Err(error) => {
-                eprintln!("failed to initialize com for icon loading: {error}");
+                log::error!("failed to initialize com for icon loading: {error}");
                 false
             }
         };

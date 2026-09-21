@@ -148,6 +148,8 @@ pub fn resolve(mode: ThemeMode, system: Mode) -> (Option<Theme>, Metrics) {
         Some(system_theme) => {
             let resolved = system_theme.pick(color);
 
+            log::info!("native theme: {} ({color:?})", system_theme.name);
+
             (
                 Some(native_theme_iced::to_theme(resolved, &system_theme.name)),
                 Metrics::of(resolved),
@@ -158,6 +160,8 @@ pub fn resolve(mode: ThemeMode, system: Mode) -> (Option<Theme>, Metrics) {
                 ColorMode::Dark => Theme::Dark,
                 _ => Theme::Light,
             };
+
+            log::warn!("no native theme available, using the built-in {color:?} theme");
 
             (Some(theme), Metrics::default())
         }

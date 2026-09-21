@@ -648,10 +648,29 @@ pub fn window_settings() -> window::Settings {
         resizable: false,
         transparent: true,
         blur: false,
+        icon: window_icon(),
         platform_specific: crate::platform::platform_window_settings(),
         exit_on_close_request: false,
         ..Default::default()
     }
+}
+
+fn window_icon() -> Option<window::Icon> {
+    static WINDOW_ICON: std::sync::OnceLock<Option<window::Icon>> = std::sync::OnceLock::new();
+
+    WINDOW_ICON
+        .get_or_init(|| {
+            let size = crate::platform::window_icon_size();
+
+            let icon = ::image::load_from_memory(ICON).ok()?;
+            let icon = icon
+                .resize(size, size, ::image::imageops::FilterType::Lanczos3)
+                .to_rgba8();
+            let (width, height) = icon.dimensions();
+
+            window::icon::from_rgba(icon.into_raw(), width, height).ok()
+        })
+        .clone()
 }
 
 fn card<'a>(rows: Vec<Element<'a, Message>>, metrics: theme::Metrics) -> Element<'a, Message> {

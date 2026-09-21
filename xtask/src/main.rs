@@ -661,33 +661,107 @@ fn windows_icon(root: &Path, metadata: &Metadata, out: &Path) -> Result<Option<P
     let image = image::open(&source)
         .with_context(|| format!("failed to open {}", source.display()))?
         .into_rgba8();
-    let image = image::imageops::resize(
-        &image,
-        WINDOWS_ICON_SIZE,
-        WINDOWS_ICON_SIZE,
-        image::imageops::FilterType::Lanczos3,
-    );
 
-    let mut png = Vec::new();
+    let images: Vec<(u32, Vec<u8>)> = WINDOWS_ICON_SIZES
+        .iter()
+        .map(|&size| -> Result<(u32, Vec<u8>)> {
+            let scaled =
+                image::imageops::resize(&image, size, size, image::imageops::FilterType::Lanczos3);
 
-    image
-        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-        .context("failed to encode the icon as PNG")?;
+            if size >= WINDOWS_ICON_PNG_MIN_SIZE {
+                let mut png = Vec::new();
+
+                scaled
+                    .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                    .context("failed to encode the icon as PNG")?;
+
+                return Ok((size, png));
+            }
+
+            Ok((size, dib(&scaled)))
+        })
+        .collect::<Result<_>>()?;
 
     let icon = out.join(format!("{}.ico", metadata.bundle_name()));
-    let mut bytes = Vec::with_capacity(png.len() + 22);
+    let mut bytes = Vec::new();
 
-    bytes.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
-    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&0u16.to_le_bytes());
     bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&32u16.to_le_bytes());
-    bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&22u32.to_le_bytes());
-    bytes.extend_from_slice(&png);
+    bytes.extend_from_slice(&(images.len() as u16).to_le_bytes());
+
+    let mut offset = 6 + 16 * images.len() as u32;
+
+    for (size, data) in &images {
+        let dimension = if *size >= WINDOWS_ICON_PNG_MIN_SIZE {
+            0
+        } else {
+            *size as u8
+        };
+
+        bytes.push(dimension);
+        bytes.push(dimension);
+        bytes.push(0);
+        bytes.push(0);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
+
+        offset += data.len() as u32;
+    }
+
+    for (_, data) in &images {
+        bytes.extend_from_slice(data);
+    }
 
     fs::write(&icon, bytes).with_context(|| format!("failed to write {icon:?}"))?;
 
     Ok(Some(icon))
+}
+
+fn dib(image: &image::RgbaImage) -> Vec<u8> {
+    let size = image.width() as usize;
+    let row_length = size * 4;
+    let mask_stride = size.div_ceil(32) * 4;
+    let raw = image.as_raw();
+    let mut bytes = Vec::with_capacity(40 + row_length * size + mask_stride * size);
+
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&(size as i32).to_le_bytes());
+    bytes.extend_from_slice(&(size as i32 * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&32u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&((row_length * size) as u32).to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+
+    for index in (0..size).rev() {
+        let row = &raw[index * row_length..(index + 1) * row_length];
+
+        for pixel in row.chunks_exact(4) {
+            bytes.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+
+    let mut mask = vec![0u8; mask_stride * size];
+
+    for index in (0..size).rev() {
+        let row = &raw[index * row_length..(index + 1) * row_length];
+        let mask_row = &mut mask[index * mask_stride..(index + 1) * mask_stride];
+
+        for (x, pixel) in row.chunks_exact(4).enumerate() {
+            if pixel[3] == 0 {
+                mask_row[x / 8] |= 1 << (7 - x % 8);
+            }
+        }
+    }
+
+    bytes.extend_from_slice(&mask);
+
+    bytes
 }
 
 fn wxs_source(
@@ -740,6 +814,12 @@ fn wxs_source(
         wxs.push_str("    <Property Id=\"ARPPRODUCTICON\" Value=\"AtrayIcon\" />\n");
     }
 
+    let shortcut_icon = if icon.is_some() {
+        " Icon=\"AtrayIcon\""
+    } else {
+        ""
+    };
+
     wxs.push_str("    <Directory Id=\"TARGETDIR\" Name=\"SourceDir\">\n");
     wxs.push_str("      <Directory Id=\"ProgramFiles64Folder\">\n");
     wxs.push_str(&format!(
@@ -754,7 +834,7 @@ fn wxs_source(
     ));
     wxs.push_str(&format!(
         "            <Shortcut Id=\"AtrayStartMenu\" Directory=\"ProgramMenuFolder\" Name=\"{name}\" \
-         WorkingDirectory=\"INSTALLFOLDER\" Advertise=\"no\" />\n"
+         WorkingDirectory=\"INSTALLFOLDER\" Advertise=\"no\"{shortcut_icon} />\n"
     ));
     wxs.push_str("          </Component>\n");
     wxs.push_str("        </Directory>\n");
@@ -874,7 +954,8 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-const WINDOWS_ICON_SIZE: u32 = 256;
+const WINDOWS_ICON_SIZES: [u32; 4] = [16, 32, 48, 256];
+const WINDOWS_ICON_PNG_MIN_SIZE: u32 = 256;
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;

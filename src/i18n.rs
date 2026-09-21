@@ -19,7 +19,9 @@ pub fn init(language: Option<&str>) {
         .or_else(|| detected().into_iter().next())
         .unwrap_or_else(|| langid!("en-US"));
 
-    *CURRENT.write().unwrap_or_else(|error| error.into_inner()) = Some(language);
+    *CURRENT.write().unwrap_or_else(|error| error.into_inner()) = Some(language.clone());
+
+    log::info!("language: {language}");
 }
 
 pub fn detected() -> Vec<LanguageIdentifier> {
