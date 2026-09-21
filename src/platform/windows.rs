@@ -14,12 +14,19 @@ use windows::{
     Win32::{
         Foundation::{
             DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
-            E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, OLE_E_ADVISENOTSUPPORTED,
+            E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, HWND, OLE_E_ADVISENOTSUPPORTED,
             OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK, SIZE,
         },
-        Graphics::Gdi::{
-            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS,
-            DeleteDC, DeleteObject, GetDIBits, GetObjectW, HBITMAP, HGDIOBJ,
+        Graphics::{
+            Dwm::{
+                DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
+                DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+                DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+            },
+            Gdi::{
+                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS,
+                DeleteDC, DeleteObject, GetDIBits, GetObjectW, HBITMAP, HGDIOBJ,
+            },
         },
         System::{
             Com::{
@@ -49,8 +56,12 @@ use windows::{
     core::{BOOL, Error, HRESULT, PCWSTR, Ref, Result, implement, w},
 };
 
+use raw_window_handle::RawWindowHandle;
+
 use crate::input::{InputHandler, InputSink, Modifier, Modifiers};
-use crate::platform::{DragEffect, DragHandler, FileIcon, RdevInputHandler};
+use crate::platform::{DragEffect, DragHandler, FileIcon, RdevInputHandler, WindowMaterial};
+
+const WINDOW_RADIUS: f32 = 8.0;
 
 static DRAGGING: AtomicBool = AtomicBool::new(false);
 
@@ -66,6 +77,50 @@ pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
         skip_taskbar: true,
         ..Default::default()
     }
+}
+
+pub fn window_radius() -> f32 {
+    WINDOW_RADIUS
+}
+
+pub fn apply_window_material(
+    window: iced::window::Id,
+    material: WindowMaterial,
+    _radius: Option<f32>,
+    dark: bool,
+) -> iced::Task<()> {
+    iced::window::run(window, move |window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+
+        let hwnd = HWND(handle.hwnd.get() as *mut c_void);
+        let backdrop = match material {
+            WindowMaterial::Tray => DWMSBT_TRANSIENTWINDOW,
+            WindowMaterial::Settings => DWMSBT_MAINWINDOW,
+        };
+
+        unsafe {
+            set_window_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &BOOL::from(dark));
+            set_window_attribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &DWMWCP_ROUND);
+            set_window_attribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop);
+        }
+    })
+}
+
+unsafe fn set_window_attribute<T>(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: &T) {
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute,
+            (value as *const T).cast(),
+            size_of::<T>() as u32,
+        )
+    };
 }
 
 pub struct WindowsDragHandler {
