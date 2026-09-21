@@ -79,6 +79,11 @@ pub fn titlebar_inset() -> f32 {
     0.0
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn window_background(background: iced::Color) -> iced::Color {
+    background
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn window_radius() -> f32 {
     0.0

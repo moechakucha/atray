@@ -333,6 +333,10 @@ pub fn titlebar_inset() -> f32 {
     28.0
 }
 
+pub fn window_background(_background: iced::Color) -> iced::Color {
+    iced::Color::TRANSPARENT
+}
+
 pub fn preferred_languages() -> Vec<String> {
     NSLocale::preferredLanguages()
         .iter()

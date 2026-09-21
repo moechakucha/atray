@@ -1,5 +1,4 @@
 use anyhow::Context;
-use iced::Color;
 
 use crate::app::App;
 
@@ -37,7 +36,7 @@ fn main() -> anyhow::Result<()> {
         .theme(App::theme)
         .title(App::title)
         .style(|_, theme| iced::theme::Style {
-            background_color: Color::TRANSPARENT,
+            background_color: crate::platform::window_background(theme.palette().background),
             ..iced::theme::Base::base(theme)
         })
         .subscription(App::subscription);
