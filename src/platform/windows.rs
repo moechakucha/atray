@@ -13,9 +13,9 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{
-            DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
-            E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, HWND, OLE_E_ADVISENOTSUPPORTED,
-            OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK, SIZE,
+            CloseHandle, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+            DV_E_FORMATETC, E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, HWND, LPARAM,
+            OLE_E_ADVISENOTSUPPORTED, OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK, SIZE, WPARAM,
         },
         Graphics::{
             Dwm::{
@@ -40,6 +40,10 @@ use windows::{
                 DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize,
             },
             SystemServices::{MK_LBUTTON, MK_RBUTTON, MODIFIERKEYS_FLAGS},
+            Threading::{
+                OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                QueryFullProcessImageNameW,
+            },
         },
         UI::{
             Input::KeyboardAndMouse::{
@@ -50,16 +54,21 @@ use windows::{
                 DROPFILES, IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF,
                 SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
             },
-            WindowsAndMessaging::FindWindowW,
+            WindowsAndMessaging::{
+                FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, SMTO_ABORTIFHUNG,
+                SendMessageTimeoutW, WM_GETTEXT,
+            },
         },
     },
-    core::{BOOL, Error, HRESULT, PCWSTR, Ref, Result, implement, w},
+    core::{BOOL, Error, HRESULT, PCWSTR, PWSTR, Ref, Result, implement, w},
 };
 
 use raw_window_handle::RawWindowHandle;
 
 use crate::input::{InputHandler, InputSink, Modifier, Modifiers};
-use crate::platform::{DragEffect, DragHandler, FileIcon, RdevInputHandler, WindowMaterial};
+use crate::platform::{
+    DragEffect, DragHandler, DragSource, FileIcon, RdevInputHandler, WindowMaterial,
+};
 
 const WINDOW_RADIUS: f32 = 8.0;
 
@@ -177,7 +186,102 @@ impl DragHandler for WindowsDragHandler {
 }
 
 fn drag_image_present() -> bool {
-    unsafe { FindWindowW(w!("SysDragImage"), None).is_ok() }
+    drag_image_window().is_some()
+}
+
+fn drag_image_window() -> Option<HWND> {
+    unsafe { FindWindowW(w!("SysDragImage"), None).ok() }
+}
+
+pub fn drag_source() -> Option<DragSource> {
+    let window = drag_image_window()?;
+    let mut pid = 0u32;
+
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+
+    let app_name = process_name(pid);
+    let window_title = app_name.as_deref().and_then(|_| foreground_title(pid));
+
+    Some(DragSource {
+        app_name,
+        window_title,
+    })
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut length = buffer.len() as u32;
+
+        let result = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        );
+
+        let _ = CloseHandle(process);
+
+        result.ok()?;
+
+        let path = String::from_utf16_lossy(&buffer[..length as usize]);
+
+        Path::new(&path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }
+}
+
+fn foreground_title(pid: u32) -> Option<String> {
+    unsafe {
+        let window = GetForegroundWindow();
+
+        if window.is_invalid() {
+            return None;
+        }
+
+        let mut owner = 0u32;
+
+        GetWindowThreadProcessId(window, Some(&mut owner));
+
+        if owner != pid {
+            return None;
+        }
+
+        window_title(window)
+    }
+}
+
+fn window_title(window: HWND) -> Option<String> {
+    let mut buffer = [0u16; 512];
+    let mut length = 0usize;
+
+    let result = unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_GETTEXT,
+            WPARAM(buffer.len()),
+            LPARAM(buffer.as_mut_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            100,
+            Some(&mut length),
+        )
+    };
+
+    if result.0 == 0 {
+        return None;
+    }
+
+    let length = length.min(buffer.len());
+
+    if length == 0 {
+        return None;
+    }
+
+    let title = String::from_utf16_lossy(&buffer[..length]);
+
+    Some(title.trim_end_matches('\0').to_owned())
 }
 
 pub struct WindowsInputHandler {
