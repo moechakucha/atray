@@ -84,7 +84,7 @@ pub fn window_radius() -> f32 {
     0.0
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn preferred_languages() -> Vec<String> {
     Vec::new()
 }

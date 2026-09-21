@@ -17,6 +17,7 @@ use windows::{
             DV_E_FORMATETC, E_INVALIDARG, E_NOTIMPL, GlobalFree, HGLOBAL, HWND, LPARAM,
             OLE_E_ADVISENOTSUPPORTED, OLE_E_NOCONNECTION, POINT, S_FALSE, S_OK, SIZE, WPARAM,
         },
+        Globalization::{GetUserDefaultLocaleName, GetUserPreferredUILanguages, MUI_LANGUAGE_NAME},
         Graphics::{
             Dwm::{
                 DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
@@ -71,6 +72,8 @@ use crate::platform::{
 };
 
 const WINDOW_RADIUS: f32 = 8.0;
+
+const LOCALE_NAME_MAX_LENGTH: usize = 85;
 
 static DRAGGING: AtomicBool = AtomicBool::new(false);
 
@@ -282,6 +285,73 @@ fn window_title(window: HWND) -> Option<String> {
     let title = String::from_utf16_lossy(&buffer[..length]);
 
     Some(title.trim_end_matches('\0').to_owned())
+}
+
+pub fn preferred_languages() -> Vec<String> {
+    let mut languages = preferred_ui_languages();
+
+    if languages.is_empty() {
+        if let Some(locale) = default_locale_name() {
+            languages.push(locale);
+        }
+    }
+
+    languages
+}
+
+fn preferred_ui_languages() -> Vec<String> {
+    let mut count = 0u32;
+    let mut length = 0u32;
+
+    unsafe {
+        if let Err(error) =
+            GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut length)
+        {
+            eprintln!("failed to query preferred ui languages: {error}");
+            return Vec::new();
+        }
+
+        if count == 0 || length == 0 {
+            return Vec::new();
+        }
+
+        let mut buffer = vec![0u16; length as usize];
+
+        if let Err(error) = GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME,
+            &mut count,
+            Some(PWSTR(buffer.as_mut_ptr())),
+            &mut length,
+        ) {
+            eprintln!("failed to read preferred ui languages: {error}");
+            return Vec::new();
+        }
+
+        let length = (length as usize).min(buffer.len());
+
+        buffer[..length]
+            .split(|unit| *unit == 0)
+            .filter(|language| !language.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect()
+    }
+}
+
+fn default_locale_name() -> Option<String> {
+    let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH];
+    let length = unsafe { GetUserDefaultLocaleName(&mut buffer) };
+
+    if length <= 1 {
+        return None;
+    }
+
+    let length = (length as usize).min(buffer.len()) - 1;
+
+    if length == 0 {
+        return None;
+    }
+
+    Some(String::from_utf16_lossy(&buffer[..length]))
 }
 
 pub struct WindowsInputHandler {
