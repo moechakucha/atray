@@ -16,8 +16,8 @@ use crate::theme;
 use super::{Config, FilterAction, FilterRule, Pattern, Side, ThemeMode};
 
 const SIDEBAR_WIDTH: f32 = 135.0;
-const CONTROL_WIDTH: f32 = 160.0;
-const WIDE_CONTROL_WIDTH: f32 = 240.0;
+const CONTROL_WIDTH: f32 = 120.0;
+const WIDE_CONTROL_WIDTH: f32 = 180.0;
 const LABEL_SIZE: f32 = 13.0;
 const NOTE_SIZE: f32 = 11.0;
 const TITLE_SIZE: f32 = 20.0;
@@ -340,6 +340,7 @@ impl Screen {
                             theme::settings_pick_list(theme, status, metrics)
                         })
                         .width(Length::Fixed(CONTROL_WIDTH))
+                        .text_size(LABEL_SIZE)
                         .into(),
                         colors,
                     ),
@@ -406,6 +407,7 @@ impl Screen {
                         .on_input(move |value| Message::RuleApp(index, value))
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(CONTROL_WIDTH))
+                        .size(LABEL_SIZE)
                         .into(),
                     colors,
                 ),
@@ -416,6 +418,7 @@ impl Screen {
                         .on_input(move |value| Message::RuleTitle(index, value))
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(CONTROL_WIDTH))
+                        .size(LABEL_SIZE)
                         .into(),
                     colors,
                 ),
@@ -429,6 +432,7 @@ impl Screen {
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
+                    .text_size(LABEL_SIZE)
                     .into(),
                     colors,
                 ),
@@ -459,6 +463,7 @@ impl Screen {
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
+                    .text_size(LABEL_SIZE)
                     .into(),
                     colors,
                 )],
@@ -476,6 +481,7 @@ impl Screen {
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
+                    .text_size(LABEL_SIZE)
                     .into(),
                     colors,
                 )],
@@ -500,6 +506,7 @@ impl Screen {
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
                     .width(Length::Fixed(CONTROL_WIDTH))
+                    .text_size(LABEL_SIZE)
                     .into(),
                     colors,
                 )],
@@ -525,6 +532,7 @@ impl Screen {
                         .on_input(Message::CacheDir)
                         .style(move |theme, status| theme::settings_input(theme, status, metrics))
                         .width(Length::Fixed(WIDE_CONTROL_WIDTH))
+                        .size(LABEL_SIZE)
                         .into(),
                     colors,
                 )],

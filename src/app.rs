@@ -965,8 +965,8 @@ impl App {
     }
 
     fn open_config(&mut self) -> Task<Message> {
-        if self.config_window.is_some() {
-            return Task::none();
+        if let Some(id) = self.config_window {
+            return window::gain_focus::<Message>(id).discard();
         }
 
         self.screen = Some(screen::Screen::from_config(&self.config));
