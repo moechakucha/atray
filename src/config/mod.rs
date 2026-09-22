@@ -37,7 +37,6 @@ impl Config {
         &self.path
     }
 
-    #[allow(unused)]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;

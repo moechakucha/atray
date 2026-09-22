@@ -306,32 +306,6 @@ pub fn settings_button(theme: &Theme, status: button::Status, metrics: Metrics) 
     }
 }
 
-pub fn settings_primary_button(
-    theme: &Theme,
-    status: button::Status,
-    metrics: Metrics,
-) -> button::Style {
-    let colors = Colors::of(theme);
-    let extended = theme.extended_palette();
-
-    let background = match status {
-        button::Status::Hovered => iced_palette::lighten(colors.accent, 0.08),
-        button::Status::Pressed => iced_palette::darken(colors.accent, 0.08),
-        _ => colors.accent,
-    };
-
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color: extended.primary.base.text,
-        border: Border {
-            radius: metrics.small_radius.into(),
-            ..Border::default()
-        },
-        shadow: Default::default(),
-        snap: true,
-    }
-}
-
 fn shade(color: Color, theme: &Theme, amount: f32) -> Color {
     if theme.extended_palette().is_dark {
         iced_palette::lighten(color, amount)

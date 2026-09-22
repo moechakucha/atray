@@ -9,6 +9,7 @@ use iced::{Alignment, ContentFit, Element, Length, Padding, window};
 
 use fluent::FluentValue;
 
+use crate::config::FilterAction::Allow;
 use crate::i18n;
 use crate::input::Modifier;
 use crate::theme;
@@ -77,8 +78,6 @@ pub enum Message {
     Language(Option<String>),
     CacheDir(String),
     LaunchAtLogin(bool),
-    Revert,
-    Save,
     OpenLink(&'static str),
 }
 
@@ -141,14 +140,8 @@ fn pattern(value: &str) -> Result<Option<Pattern>, String> {
 
 pub struct Screen {
     tab: Tab,
-    move_modifier: Modifier,
-    invert_copy_and_move: bool,
     rules: Vec<RuleDraft>,
-    side: Side,
-    theme: ThemeMode,
-    language: Option<String>,
     cache_dir: String,
-    launch_at_login: bool,
     error: Option<String>,
     icon: Option<Handle>,
 }
@@ -157,81 +150,125 @@ impl Screen {
     pub fn from_config(config: &Config) -> Self {
         Self {
             tab: Tab::Behavior,
-            move_modifier: config.behavior.move_modifier,
-            invert_copy_and_move: config.behavior.invert_copy_and_move,
             rules: config
                 .behavior
                 .filter
                 .iter()
                 .map(RuleDraft::from_rule)
                 .collect(),
-            side: config.appearance.side,
-            theme: config.appearance.theme,
-            language: config.appearance.language.clone(),
             cache_dir: config.advanced.cache_dir.clone(),
-            launch_at_login: config.advanced.launch_at_login,
             error: None,
             icon: icon_handle(),
         }
     }
 
-    pub fn apply(&self, config: &mut Config) -> Result<(), String> {
+    fn sync_filter(&mut self, config: &mut Config) -> bool {
         let mut filter = Vec::with_capacity(self.rules.len());
 
         for (index, rule) in self.rules.iter().enumerate() {
-            filter.push(rule.to_rule(index)?);
+            match rule.to_rule(index) {
+                Ok(rule) => filter.push(rule),
+                Err(error) => {
+                    self.error = Some(error);
+                    return false;
+                }
+            }
         }
 
-        config.behavior.move_modifier = self.move_modifier;
-        config.behavior.invert_copy_and_move = self.invert_copy_and_move;
-        config.behavior.filter = filter;
-        config.appearance.side = self.side;
-        config.appearance.theme = self.theme;
-        config.appearance.language = self.language.clone();
-        config.advanced.cache_dir = self.cache_dir.trim().to_owned();
-        config.advanced.launch_at_login = self.launch_at_login;
+        self.error = None;
 
-        Ok(())
+        if config.behavior.filter == filter {
+            return false;
+        }
+
+        config.behavior.filter = filter;
+
+        true
     }
 
-    pub fn update(&mut self, message: Message) {
+    pub fn update(&mut self, message: Message, config: &mut Config) -> bool {
         match message {
-            Message::Tab(tab) => self.tab = tab,
-            Message::MoveModifier(modifier) => self.move_modifier = modifier,
-            Message::InvertCopyAndMove(value) => self.invert_copy_and_move = value,
+            Message::Tab(tab) => {
+                self.tab = tab;
+                false
+            }
+            Message::MoveModifier(modifier) => {
+                config.behavior.move_modifier = modifier;
+                true
+            }
+            Message::InvertCopyAndMove(value) => {
+                config.behavior.invert_copy_and_move = value;
+                true
+            }
             Message::RuleApp(index, value) => {
                 if let Some(rule) = self.rules.get_mut(index) {
                     rule.app = value;
                 }
+
+                self.sync_filter(config)
             }
             Message::RuleTitle(index, value) => {
                 if let Some(rule) = self.rules.get_mut(index) {
                     rule.title = value;
                 }
+
+                self.sync_filter(config)
             }
             Message::RuleAction(index, action) => {
                 if let Some(rule) = self.rules.get_mut(index) {
                     rule.action = action;
                 }
+
+                self.sync_filter(config)
             }
             Message::RuleRemove(index) => {
                 if index < self.rules.len() {
                     self.rules.remove(index);
                 }
+
+                self.sync_filter(config)
             }
-            Message::RuleAdd => self.rules.push(RuleDraft {
-                app: String::new(),
-                title: String::new(),
-                action: FilterAction::default(),
-            }),
-            Message::Side(side) => self.side = side,
-            Message::Theme(theme) => self.theme = theme,
-            Message::Language(language) => self.language = language,
-            Message::CacheDir(value) => self.cache_dir = value,
-            Message::LaunchAtLogin(enabled) => self.launch_at_login = enabled,
-            Message::Revert | Message::Save => {}
+            Message::RuleAdd => {
+                self.rules.push(RuleDraft {
+                    app: String::new(),
+                    title: String::new(),
+                    action: Allow,
+                });
+
+                self.sync_filter(config)
+            }
+            Message::Side(side) => {
+                config.appearance.side = side;
+                true
+            }
+            Message::Theme(theme) => {
+                config.appearance.theme = theme;
+                true
+            }
+            Message::Language(language) => {
+                config.appearance.language = language;
+                true
+            }
+            Message::CacheDir(value) => {
+                self.cache_dir = value;
+
+                let cache_dir = self.cache_dir.trim().to_owned();
+
+                if config.advanced.cache_dir == cache_dir {
+                    return false;
+                }
+
+                config.advanced.cache_dir = cache_dir;
+
+                true
+            }
+            Message::LaunchAtLogin(enabled) => {
+                config.advanced.launch_at_login = enabled;
+                true
+            }
             Message::OpenLink(url) => {
                 let _ = open::that(url);
+                false
             }
         }
     }
@@ -240,18 +277,19 @@ impl Screen {
         self.error = Some(error);
     }
 
-    pub fn clear_error(&mut self) {
-        self.error = None;
-    }
-
-    pub fn view(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
+    pub fn view(
+        &self,
+        config: &Config,
+        colors: theme::Colors,
+        metrics: theme::Metrics,
+    ) -> Element<'_, Message> {
         let sidebar = container(self.sidebar(metrics))
             .style(theme::settings_sidebar)
             .width(SIDEBAR_WIDTH)
             .height(Length::Fill);
 
         let pane = scrollable(
-            container(self.pane(colors, metrics))
+            container(self.pane(config, colors, metrics))
                 .width(Length::Fill)
                 .padding(Padding {
                     top: crate::platform::titlebar_inset() + PANE_PADDING,
@@ -263,7 +301,7 @@ impl Screen {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let body = column(vec![pane.into(), self.footer(colors, metrics)])
+        let body = column(vec![pane.into(), self.footer(colors)])
             .width(Length::Fill)
             .height(Length::Fill);
 
@@ -310,17 +348,23 @@ impl Screen {
         .into()
     }
 
-    fn pane(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
+    fn pane(
+        &self,
+        config: &Config,
+        colors: theme::Colors,
+        metrics: theme::Metrics,
+    ) -> Element<'_, Message> {
         match self.tab {
-            Tab::Behavior => self.behavior_pane(colors, metrics),
-            Tab::Appearance => self.appearance_pane(colors, metrics),
-            Tab::Advanced => self.advanced_pane(colors, metrics),
+            Tab::Behavior => self.behavior_pane(config, colors, metrics),
+            Tab::Appearance => self.appearance_pane(config, colors, metrics),
+            Tab::Advanced => self.advanced_pane(config, colors, metrics),
             Tab::About => self.about_pane(colors, metrics),
         }
     }
 
     fn behavior_pane(
         &self,
+        config: &Config,
         colors: theme::Colors,
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
@@ -333,7 +377,7 @@ impl Screen {
                         i18n::t("behavior-move-modifier-description"),
                         pick_list(
                             options(&MODIFIERS, modifier_label),
-                            Some(modifier_label(self.move_modifier)),
+                            Some(modifier_label(config.behavior.move_modifier)),
                             |label| Message::MoveModifier(modifier_of(&label)),
                         )
                         .style(move |theme, status| {
@@ -347,7 +391,7 @@ impl Screen {
                     setting_row(
                         i18n::t("behavior-invert"),
                         i18n::t("behavior-invert-description"),
-                        toggler(self.invert_copy_and_move)
+                        toggler(config.behavior.invert_copy_and_move)
                             .on_toggle(Message::InvertCopyAndMove)
                             .into(),
                         colors,
@@ -443,6 +487,7 @@ impl Screen {
 
     fn appearance_pane(
         &self,
+        config: &Config,
         colors: theme::Colors,
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
@@ -458,7 +503,7 @@ impl Screen {
                     i18n::t("appearance-side-description"),
                     pick_list(
                         options(&SIDES, side_label),
-                        Some(side_label(self.side)),
+                        Some(side_label(config.appearance.side)),
                         |label| Message::Side(side_of(&label)),
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
@@ -476,7 +521,7 @@ impl Screen {
                     i18n::t("appearance-theme-description"),
                     pick_list(
                         options(&THEMES, theme_label),
-                        Some(theme_label(self.theme)),
+                        Some(theme_label(config.appearance.theme)),
                         |label| Message::Theme(theme_of(&label)),
                     )
                     .style(move |theme, status| theme::settings_pick_list(theme, status, metrics))
@@ -494,7 +539,7 @@ impl Screen {
                     i18n::t("appearance-language-description"),
                     pick_list(
                         language_labels,
-                        Some(language_label(self.language.as_deref())),
+                        Some(language_label(config.appearance.language.as_deref())),
                         move |label| {
                             Message::Language(
                                 language
@@ -519,6 +564,7 @@ impl Screen {
 
     fn advanced_pane(
         &self,
+        config: &Config,
         colors: theme::Colors,
         metrics: theme::Metrics,
     ) -> Element<'_, Message> {
@@ -544,7 +590,7 @@ impl Screen {
                 vec![setting_row(
                     i18n::t("advanced-launch-at-login"),
                     i18n::t("advanced-launch-at-login-description"),
-                    toggler(self.launch_at_login)
+                    toggler(config.advanced.launch_at_login)
                         .on_toggle(Message::LaunchAtLogin)
                         .into(),
                     colors,
@@ -612,40 +658,19 @@ impl Screen {
         .into()
     }
 
-    fn footer(&self, colors: theme::Colors, metrics: theme::Metrics) -> Element<'_, Message> {
-        let status: Element<'_, Message> = match &self.error {
-            Some(error) => text(error.as_str())
-                .size(NOTE_SIZE)
-                .color(colors.danger)
-                .into(),
+    fn footer(&self, colors: theme::Colors) -> Element<'_, Message> {
+        match &self.error {
+            Some(error) => container(
+                text(error.as_str())
+                    .size(NOTE_SIZE)
+                    .color(colors.danger)
+                    .wrapping(Wrapping::Word),
+            )
+            .padding([12.0, PANE_PADDING])
+            .width(Length::Fill)
+            .into(),
             None => space().into(),
-        };
-
-        let buttons = row(vec![
-            button(text(i18n::t("footer-revert")).size(LABEL_SIZE))
-                .on_press(Message::Revert)
-                .style(move |theme, status| theme::settings_button(theme, status, metrics))
-                .padding([6, 12])
-                .into(),
-            button(text(i18n::t("footer-save")).size(LABEL_SIZE))
-                .on_press(Message::Save)
-                .style(move |theme, status| theme::settings_primary_button(theme, status, metrics))
-                .padding([6, 12])
-                .into(),
-        ])
-        .spacing(8);
-
-        container(
-            row(vec![
-                status,
-                space().width(Length::Fill).into(),
-                buttons.into(),
-            ])
-            .align_y(Alignment::Center),
-        )
-        .padding([12.0, PANE_PADDING])
-        .width(Length::Fill)
-        .into()
+        }
     }
 }
 

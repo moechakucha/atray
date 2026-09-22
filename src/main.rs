@@ -52,7 +52,10 @@ fn run() -> anyhow::Result<()> {
     log::info!("config: {}", config_path.display());
 
     let config = config::Config::load(&config_path)?;
-    config.save_to_original()?;
+
+    if !config_path.exists() {
+        config.save(&config_path)?;
+    }
 
     log::info!(
         "theme: {:?}, side: {:?}, cache: {}",

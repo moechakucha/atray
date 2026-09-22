@@ -439,6 +439,7 @@ struct TooltipHover {
 
 pub struct App {
     config: config::Config,
+    config_dirty: bool,
     file_relay: Vec<DeferredFile>,
     pending_icons: HashSet<PathBuf>,
     window_id: Option<window::Id>,
@@ -470,6 +471,7 @@ impl App {
 
         let mut app = Self {
             config,
+            config_dirty: false,
             file_relay,
             pending_icons: HashSet::new(),
             window_id: None,
@@ -979,62 +981,59 @@ impl App {
         task.chain(window::gain_focus(id)).discard()
     }
 
-    fn save_config(&mut self) -> Task<Message> {
-        let Some(screen) = &self.screen else {
-            return Task::none();
+    fn screen_message(&mut self, message: screen::Message) -> Task<Message> {
+        let previous_side = self.config.appearance.side;
+        let previous_theme = self.config.appearance.theme;
+        let previous_language = self.config.appearance.language.clone();
+        let previous_autostart = self.config.advanced.launch_at_login;
+
+        let changed = match &mut self.screen {
+            Some(screen) => screen.update(message, &mut self.config),
+            None => return Task::none(),
         };
 
-        let mut config = self.config.clone();
-
-        if let Err(error) = screen.apply(&mut config) {
-            log::warn!("invalid settings: {error}");
-
-            if let Some(screen) = &mut self.screen {
-                screen.set_error(error);
-            }
-
+        if !changed {
             return Task::none();
         }
 
-        if let Err(error) = config.save_to_original() {
-            log::error!("failed to save config: {error}");
+        self.config_dirty = true;
 
-            if let Some(screen) = &mut self.screen {
-                screen.set_error(i18n::t_args(
-                    "error-save-config",
-                    &[("error", error.to_string().into())],
-                ));
-            }
+        let mut tasks = Vec::new();
 
-            return Task::none();
+        if self.config.appearance.theme != previous_theme {
+            self.refresh_theme();
+            tasks.push(self.materials());
         }
-
-        let previous_side = self.config.appearance.side;
-        let previous_language = self.config.appearance.language.clone();
-        self.config = config;
-        self.refresh_theme();
-        self.save_session();
-
-        log::info!("settings saved to {}", self.config.path().display());
 
         if self.config.appearance.language != previous_language {
             self.relocalize();
         }
 
-        if let Some(error) = self.apply_autostart()
+        if self.config.advanced.launch_at_login != previous_autostart
+            && let Some(error) = self.apply_autostart()
             && let Some(screen) = &mut self.screen
         {
             screen.set_error(error);
         }
 
-        if let Some(screen) = &mut self.screen {
-            screen.clear_error();
+        if self.config.appearance.side != previous_side {
+            tasks.push(self.restart_tray());
         }
 
-        if self.config.appearance.side == previous_side {
-            self.materials()
-        } else {
-            Task::batch([self.materials(), self.restart_tray()])
+        Task::batch(tasks)
+    }
+
+    fn save_config(&mut self) {
+        if !self.config_dirty {
+            return;
+        }
+
+        match self.config.save_to_original() {
+            Ok(()) => {
+                self.config_dirty = false;
+                log::debug!("config saved to {}", self.config.path().display());
+            }
+            Err(error) => log::error!("failed to save config: {error}"),
         }
     }
 
@@ -1048,11 +1047,9 @@ impl App {
         }
 
         self.config.advanced.launch_at_login = enabled;
-        log::info!("launch at login: {enabled}");
+        self.config_dirty = true;
 
-        if let Err(err) = self.config.save_to_original() {
-            log::error!("failed to save config: {err}");
-        }
+        log::info!("launch at login: {enabled}");
     }
 
     fn apply_autostart(&self) -> Option<String> {
@@ -1064,27 +1061,6 @@ impl App {
                     &[("error", err.to_string().into())],
                 )
             })
-    }
-
-    fn screen_message(&mut self, message: screen::Message) -> Task<Message> {
-        match message {
-            screen::Message::Save => return self.save_config(),
-            screen::Message::Revert => {
-                let restored = screen::Screen::from_config(&self.config);
-                self.screen = Some(restored);
-
-                log::debug!("settings reverted");
-
-                Task::none()
-            }
-            message => {
-                if let Some(screen) = &mut self.screen {
-                    screen.update(message);
-                }
-
-                Task::none()
-            }
-        }
     }
 
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
@@ -1104,7 +1080,9 @@ impl App {
         let colors = theme::Colors::of(&theme);
 
         match &self.screen {
-            Some(screen) => screen.view(colors, self.metrics).map(Message::Screen),
+            Some(screen) => screen
+                .view(&self.config, colors, self.metrics)
+                .map(Message::Screen),
             None => container(text("")).into(),
         }
     }
@@ -1326,6 +1304,7 @@ impl App {
 
                 return match id.as_str() {
                     "quit" => {
+                        self.save_config();
                         self.discard_lingering();
                         iced::exit()
                     }
@@ -1335,11 +1314,21 @@ impl App {
                     }
                     "reload_config_file" => {
                         let previous_side = self.config.appearance.side;
+                        let previous_theme = self.config.appearance.theme;
                         let previous_language = self.config.appearance.language.clone();
                         self.config = config::Config::load(self.config.path()).unwrap_or_default();
+                        self.config_dirty = false;
 
-                        self.refresh_theme();
-                        self.save_session();
+                        if self.config_window.is_some() {
+                            self.screen = Some(screen::Screen::from_config(&self.config));
+                        }
+
+                        let mut tasks = Vec::new();
+
+                        if self.config.appearance.theme != previous_theme {
+                            self.refresh_theme();
+                            tasks.push(self.materials());
+                        }
 
                         if self.config.appearance.language != previous_language {
                             self.relocalize();
@@ -1349,11 +1338,11 @@ impl App {
                             log::error!("{error}");
                         }
 
-                        if self.config.appearance.side == previous_side {
-                            Task::none()
-                        } else {
-                            self.restart_tray()
+                        if self.config.appearance.side != previous_side {
+                            tasks.push(self.restart_tray());
                         }
+
+                        Task::batch(tasks)
                     }
                     "settings" => self.open_config(),
                     _ => Task::none(),
@@ -1461,6 +1450,7 @@ impl App {
                 if self.config_window == Some(id) {
                     self.config_window = None;
                     self.screen = None;
+                    self.save_config();
                 }
 
                 Task::none()

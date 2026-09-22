@@ -72,12 +72,8 @@ about-source = Source
 about-issues = Issues
 about-copyright = © 2026 moechakucha. Licensed under the GNU General Public License v3.0.
 
-footer-revert = Revert
-footer-save = Save
-
 error-rule-app = Rule { $index }: app: { $error }
 error-rule-window-title = Rule { $index }: title: { $error }
-error-save-config = failed to save config: { $error }
 error-launch-at-login = failed to update launch at login: { $error }
 
 file-unknown-name = unknown file

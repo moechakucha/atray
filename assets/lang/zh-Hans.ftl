@@ -72,12 +72,8 @@ about-source = 源码
 about-issues = 问题反馈
 about-copyright = © 2026 moechakucha。基于 GNU 通用公共许可证 v3.0 授权。
 
-footer-revert = 还原
-footer-save = 保存
-
 error-rule-app = 规则 { $index }：应用：{ $error }
 error-rule-window-title = 规则 { $index }：标题：{ $error }
-error-save-config = 保存配置失败：{ $error }
 error-launch-at-login = 更新登录项失败：{ $error }
 
 file-unknown-name = 未知文件
