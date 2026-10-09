@@ -66,7 +66,13 @@ fn run() -> anyhow::Result<()> {
 
     i18n::init(config.appearance.language.as_deref());
 
-    let _tray = tray::build().context("failed to build tray icon")?;
+    let _tray = match tray::build() {
+        Ok(tray) => Some(tray),
+        Err(error) => {
+            log::error!("failed to build the tray icon: {error}");
+            None
+        }
+    };
 
     let daemon = iced::daemon(move || App::new(config.clone()), App::update, App::view)
         .theme(App::theme)

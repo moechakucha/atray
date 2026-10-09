@@ -12,6 +12,12 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 #[cfg(not(target_os = "macos"))]
 mod rdev_input;
 
@@ -48,19 +54,29 @@ pub fn get_drag_handler() -> Box<dyn DragHandler> {
     Box::new(WindowsDragHandler::new())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+pub fn get_drag_handler() -> Box<dyn DragHandler> {
+    Box::new(X11DragHandler::new())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn get_drag_handler() -> Box<dyn DragHandler> {
     todo!("implement a drag handler for this platform")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn app_init() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn platform_window_settings() -> iced::window::settings::PlatformSpecific {
     iced::window::settings::PlatformSpecific::default()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn settings_window_settings() -> iced::window::settings::PlatformSpecific {
+    platform_window_settings()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,7 +85,7 @@ pub struct DragSource {
     pub window_title: Option<String>,
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn drag_source() -> Option<DragSource> {
     None
 }
@@ -79,7 +95,7 @@ pub fn titlebar_inset() -> f32 {
     0.0
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn window_background(background: iced::Color) -> iced::Color {
     background
 }
@@ -94,7 +110,7 @@ pub fn window_icon_size() -> u32 {
     32
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn preferred_languages() -> Vec<String> {
     Vec::new()
 }
@@ -106,12 +122,12 @@ pub struct FileIcon {
     pub rgba: Vec<u8>,
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn file_icon(_path: &std::path::Path, _size: u32) -> Option<FileIcon> {
     None
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn file_icon_task(_path: PathBuf, _size: u32) -> iced::Task<Option<FileIcon>> {
     iced::Task::done(None)
 }

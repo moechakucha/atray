@@ -682,7 +682,7 @@ pub fn window_settings() -> window::Settings {
         transparent: true,
         blur: false,
         icon: window_icon(),
-        platform_specific: crate::platform::platform_window_settings(),
+        platform_specific: crate::platform::settings_window_settings(),
         exit_on_close_request: false,
         ..Default::default()
     }

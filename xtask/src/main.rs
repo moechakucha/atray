@@ -27,6 +27,10 @@ fn main() -> Result<()> {
             let msi = build_msi(&sh, &root, &metadata, &args)?;
             println!("{}", msi.display());
         }
+        Task::Deb => {
+            let deb = build_deb(&sh, &root, &metadata, &args)?;
+            println!("{}", deb.display());
+        }
     }
 
     Ok(())
@@ -37,6 +41,7 @@ enum Task {
     Bundle,
     Dmg,
     Msi,
+    Deb,
 }
 
 #[derive(Debug)]
@@ -65,6 +70,7 @@ impl Args {
                 "bundle" => task = Some(Task::Bundle),
                 "dmg" => task = Some(Task::Dmg),
                 "msi" => task = Some(Task::Msi),
+                "deb" => task = Some(Task::Deb),
                 "--target" => target = Some(args.next().context("--target needs a triple")?),
                 "--debug" => release = false,
                 "--no-sign" => sign = false,
@@ -79,7 +85,7 @@ impl Args {
         }
 
         Ok(Self {
-            task: task.context("expected `bundle`, `dmg` or `msi`")?,
+            task: task.context("expected `bundle`, `dmg`, `msi` or `deb`")?,
             target,
             release,
             sign,
@@ -127,6 +133,25 @@ impl Args {
         Ok(target)
     }
 
+    fn linux_target(&self) -> Result<Option<&str>> {
+        let Some(target) = self.target.as_deref() else {
+            if env::consts::OS != "linux" {
+                bail!(
+                    "no --target given and this host is not Linux; \
+                     pass e.g. --target x86_64-unknown-linux-gnu"
+                );
+            }
+
+            return Ok(None);
+        };
+
+        if !target.contains("linux") {
+            bail!("{target} is not a Linux target (expected *-unknown-linux-gnu)");
+        }
+
+        Ok(Some(target))
+    }
+
     fn arch(&self) -> String {
         match self.target.as_deref() {
             Some(target) => target.split('-').next().unwrap_or(target).to_owned(),
@@ -139,7 +164,8 @@ fn print_help() {
     println!(
         "cargo xtask bundle [--target <triple>] [--debug] [--no-sign] [--out <dir>]\n\
          cargo xtask dmg    [--target <triple>] [--debug] [--no-sign] [--out <dir>]\n\
-         cargo xtask msi    [--target <triple>] [--debug] [--no-build] [--out <dir>]"
+         cargo xtask msi    [--target <triple>] [--debug] [--no-build] [--out <dir>]\n\
+         cargo xtask deb    [--target <triple>] [--debug] [--no-build] [--out <dir>]"
     );
 }
 
@@ -170,6 +196,10 @@ struct Package {
     version: String,
     manifest_path: PathBuf,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    authors: Vec<String>,
+    #[serde(default)]
     metadata: Option<serde_json::Value>,
     targets: Vec<Target>,
 }
@@ -189,6 +219,7 @@ struct BundleMeta {
     resources: Vec<String>,
     category: Option<String>,
     copyright: Option<String>,
+    deb_depends: Vec<String>,
     osx_minimum_system_version: Option<String>,
     osx_info_plist_exts: Vec<String>,
     osx_url_schemes: Vec<String>,
@@ -199,6 +230,8 @@ struct Metadata {
     name: String,
     version: String,
     binary: String,
+    description: Option<String>,
+    authors: Vec<String>,
     bundle: BundleMeta,
 }
 
@@ -246,6 +279,8 @@ impl Metadata {
             name: package.name.clone(),
             version: package.version.clone(),
             binary,
+            description: package.description.clone(),
+            authors: package.authors.clone(),
             bundle,
         })
     }
@@ -256,6 +291,31 @@ impl Metadata {
 
     fn identifier(&self) -> &str {
         self.bundle.identifier.as_deref().unwrap_or(&self.name)
+    }
+
+    fn deb_name(&self) -> String {
+        self.bundle_name()
+            .to_lowercase()
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '-') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    }
+
+    fn deb_version(&self) -> String {
+        self.version.replace('-', "~")
+    }
+
+    fn maintainer(&self) -> String {
+        self.authors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| manufacturer(self.identifier()))
     }
 }
 
@@ -645,6 +705,268 @@ fn build_msi(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Resul
     }
 
     Ok(msi)
+}
+
+fn build_deb(sh: &Shell, root: &Path, metadata: &Metadata, args: &Args) -> Result<PathBuf> {
+    let target = args.linux_target()?;
+
+    if args.build {
+        build_binary(sh, args, target, &metadata.binary)?;
+    }
+
+    let binary = binary_path(args, metadata)?;
+    let arch = deb_arch(&args.arch()).to_owned();
+    let stem = format!("{}-{arch}", metadata.deb_name());
+
+    fs::create_dir_all(&args.out)?;
+
+    let staging = args.out.join(&stem);
+
+    if staging.exists() {
+        fs::remove_dir_all(&staging).with_context(|| format!("failed to clear {staging:?}"))?;
+    }
+
+    let data = staging.join("usr");
+    let control = staging.join("DEBIAN");
+    let bin = data.join("bin");
+    let applications = data.join("share/applications");
+    let doc = data.join("share/doc").join(metadata.deb_name());
+
+    fs::create_dir_all(&bin)?;
+    fs::create_dir_all(&applications)?;
+    fs::create_dir_all(&doc)?;
+    fs::create_dir_all(&control)?;
+
+    let installed = bin.join(&metadata.binary);
+    fs::copy(&binary, &installed)
+        .with_context(|| format!("failed to copy {} into the package", binary.display()))?;
+    make_executable(&installed)?;
+
+    install_icons(root, metadata, &data)?;
+
+    fs::write(
+        applications.join(format!("{}.desktop", metadata.identifier())),
+        desktop_entry(metadata),
+    )?;
+    fs::write(doc.join("copyright"), copyright(root, metadata))?;
+    fs::write(control.join("control"), control_file(metadata, &arch))?;
+
+    let temporary = tempfile::tempdir_in(&args.out)?;
+    let data_tar = temporary.path().join("data.tar.gz");
+    let control_tar = temporary.path().join("control.tar.gz");
+
+    tar_gz(sh, &staging, &["usr"], &data_tar)?;
+    tar_gz(sh, &control, &["control"], &control_tar)?;
+
+    let deb = args.out.join(format!("{stem}.deb"));
+
+    if deb.exists() {
+        fs::remove_file(&deb).with_context(|| format!("failed to clear {deb:?}"))?;
+    }
+
+    let archive = ar_archive(&[
+        ("debian-binary", b"2.0\n".to_vec()),
+        ("control.tar.gz", fs::read(&control_tar)?),
+        ("data.tar.gz", fs::read(&data_tar)?),
+    ]);
+
+    fs::write(&deb, archive).with_context(|| format!("failed to write {deb:?}"))?;
+
+    Ok(deb)
+}
+
+const DEB_ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+
+fn install_icons(root: &Path, metadata: &Metadata, data: &Path) -> Result<()> {
+    let Some(icon) = metadata
+        .bundle
+        .icon
+        .iter()
+        .find(|icon| icon.ends_with(".png"))
+    else {
+        return Ok(());
+    };
+
+    let source = image::open(root.join(icon)).with_context(|| format!("failed to open {icon}"))?;
+    let identifier = metadata.identifier();
+
+    for size in DEB_ICON_SIZES {
+        if size > source.width().max(source.height()) {
+            continue;
+        }
+
+        let dir = data.join(format!("share/icons/hicolor/{size}x{size}/apps"));
+        fs::create_dir_all(&dir)?;
+
+        let scaled = image::DynamicImage::ImageRgba8(source.to_rgba8())
+            .resize(size, size, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let mut canvas = image::RgbaImage::new(size, size);
+        let x = ((size - scaled.width()) / 2) as i64;
+        let y = ((size - scaled.height()) / 2) as i64;
+
+        image::imageops::overlay(&mut canvas, &scaled, x, y);
+
+        canvas.save_with_format(
+            dir.join(format!("{identifier}.png")),
+            image::ImageFormat::Png,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn desktop_entry(metadata: &Metadata) -> String {
+    let name = metadata.bundle_name();
+    let identifier = metadata.identifier();
+
+    let mut entry = String::from("[Desktop Entry]\nVersion=1.0\nType=Application\n");
+
+    entry.push_str(&format!("Name={name}\n"));
+
+    if let Some(description) = &metadata.description {
+        entry.push_str(&format!("Comment={description}\n"));
+    }
+
+    entry.push_str(&format!("Exec={}\n", metadata.binary));
+    entry.push_str(&format!("Icon={identifier}\n"));
+    entry.push_str("Terminal=false\n");
+
+    if let Some(category) = desktop_category(&metadata.bundle.category) {
+        entry.push_str(&format!("Categories={category};\n"));
+    }
+
+    entry.push_str(&format!("StartupWMClass={identifier}\n"));
+
+    entry
+}
+
+fn desktop_category(category: &Option<String>) -> Option<&str> {
+    category.as_deref().filter(|category| {
+        !category.is_empty() && category.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+fn control_file(metadata: &Metadata, arch: &str) -> String {
+    let mut control = String::new();
+
+    control.push_str(&format!("Package: {}\n", metadata.deb_name()));
+    control.push_str(&format!("Version: {}\n", metadata.deb_version()));
+    control.push_str(&format!("Architecture: {arch}\n"));
+    control.push_str(&format!("Maintainer: {}\n", metadata.maintainer()));
+    control.push_str(&format!(
+        "Section: {}\n",
+        deb_section(&metadata.bundle.category)
+    ));
+    control.push_str("Priority: optional\n");
+
+    if !metadata.bundle.deb_depends.is_empty() {
+        control.push_str(&format!(
+            "Depends: {}\n",
+            metadata.bundle.deb_depends.join(", ")
+        ));
+    }
+
+    let description = metadata
+        .description
+        .as_deref()
+        .unwrap_or_else(|| metadata.bundle_name())
+        .replace('\n', " ");
+
+    control.push_str(&format!("Description: {description}\n"));
+
+    control
+}
+
+fn deb_section(category: &Option<String>) -> &'static str {
+    match category.as_deref() {
+        Some(category) if category.eq_ignore_ascii_case("graphics") => "graphics",
+        Some(category) if category.eq_ignore_ascii_case("network") => "net",
+        Some(category) if category.eq_ignore_ascii_case("sound") => "sound",
+        _ => "utils",
+    }
+}
+
+fn deb_arch(arch: &str) -> &str {
+    match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "i586" | "i686" => "i386",
+        "arm" | "armv7" | "armv7l" => "armhf",
+        "riscv64gc" => "riscv64",
+        "powerpc64le" => "ppc64el",
+        other => other,
+    }
+}
+
+fn copyright(root: &Path, metadata: &Metadata) -> String {
+    let mut text = String::new();
+
+    text.push_str(&format!(
+        "Copyright {}\n",
+        metadata
+            .bundle
+            .copyright
+            .clone()
+            .unwrap_or_else(|| metadata.maintainer())
+    ));
+
+    let license = ["LICENSE.md", "LICENSE", "LICENSE.txt", "COPYING"]
+        .iter()
+        .find_map(|name| fs::read_to_string(root.join(name)).ok());
+
+    if let Some(license) = license {
+        text.push('\n');
+        text.push_str(&license);
+    }
+
+    text
+}
+
+fn tar_gz(sh: &Shell, dir: &Path, members: &[&str], out: &Path) -> Result<()> {
+    sh.cmd("tar")
+        .arg("--create")
+        .arg("--gzip")
+        .arg("--format=ustar")
+        .arg("--file")
+        .arg(out)
+        .arg("--directory")
+        .arg(dir)
+        .arg("--owner=0")
+        .arg("--group=0")
+        .arg("--numeric-owner")
+        .arg("--mtime=@0")
+        .arg("--sort=name")
+        .args(members)
+        .run()
+        .with_context(|| format!("failed to create {out:?} (is `tar` installed?)"))?;
+
+    Ok(())
+}
+
+fn ar_archive(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut archive = b"!<arch>\n".to_vec();
+
+    for (name, data) in members {
+        let header = format!(
+            "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
+            format!("{name}/"),
+            0,
+            0,
+            0,
+            "100644",
+            data.len()
+        );
+
+        archive.extend_from_slice(header.as_bytes());
+        archive.extend_from_slice(data);
+
+        if data.len() % 2 == 1 {
+            archive.push(b'\n');
+        }
+    }
+
+    archive
 }
 
 fn windows_icon(root: &Path, metadata: &Metadata, out: &Path) -> Result<Option<PathBuf>> {

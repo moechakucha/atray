@@ -1,5 +1,6 @@
 [package]
 name = "atray"
+authors = ["moechakucha <moechakucha@prwk.moe>"]
 description = "Simple file relay tray; cross-platform alternative to Yoink"
 version = "0.1.0"
 edition = "2024"
@@ -10,7 +11,31 @@ icon = ["assets/icon.png", "assets/icon.icns"]
 category = "Utility"
 osx_minimum_system_version = "13.0"
 osx_info_plist_exts = ["assets/Info.plist.ext"]
-deb_depends = ["libc6", "libx11-6", "libxkbcommon0", "libwayland-client0"]
+deb_depends = [
+    "libc6",
+    "libegl1",
+    "libfontconfig1",
+    "libfreetype6",
+    "libgl1",
+    "libudev1",
+    "libwayland-client0",
+    "libx11-6",
+    "libx11-xcb1",
+    "libxcursor1",
+    "libxext6",
+    "libxft2",
+    "libxi6",
+    "libxinerama1",
+    "libxkbcommon0",
+    "libxmu6",
+    "libxpresent1",
+    "libxrandr2",
+    "libxrender1",
+    "libxss1",
+    "libxt6",
+    "libxtst6",
+    "libxxf86vm1",
+]
 
 [dependencies]
 anyhow = "1"
@@ -30,7 +55,6 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 toml = "1"
-tray-icon = "0.25"
 unic-langid = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -51,8 +75,11 @@ windows = { version = "0.62", features = [
 ] }
 windows-core = "0.62"
 raw-window-handle = "0.6"
+tray-icon = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+resvg = { version = "0.45", default-features = false }
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.14"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -89,6 +116,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWorkspace",
 ] }
 raw-window-handle = "0.6"
+tray-icon = "0.25"
 
 [profile.release]
 strip = "symbols"

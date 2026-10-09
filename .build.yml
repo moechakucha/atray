@@ -13,9 +13,31 @@ packages:
   - genisoimage
   - git
   - libbz2-dev
+  - libfontconfig1-dev
+  - libfreetype6-dev
+  - libgl-dev
   - liblzma-dev
   - libssl-dev
+  - libudev-dev
+  - libwayland-dev
+  - libx11-dev
+  - libx11-xcb-dev
+  - libxcursor-dev
+  - libxdo-dev
+  - libxext-dev
+  - libxft-dev
+  - libxi-dev
+  - libxinerama-dev
+  - libxkbcommon-dev
   - libxml2-dev
+  - libxmu-dev
+  - libxpresent-dev
+  - libxrandr-dev
+  - libxrender-dev
+  - libxss-dev
+  - libxt-dev
+  - libxtst-dev
+  - libxxf86vm-dev
   - lld
   - llvm
   - msitools
@@ -27,6 +49,7 @@ packages:
   - zlib1g-dev
 
 environment:
+  LINUX_TARGETS: x86_64-unknown-linux-gnu
   MACOS_TARGETS: aarch64-apple-darwin x86_64-apple-darwin
   WINDOWS_TARGETS: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
   MACOSX_DEPLOYMENT_TARGET: "13.0"
@@ -76,6 +99,21 @@ tasks:
       fi
 
       ( cd "$LIBDMG_HFSPLUS" && cmake . && make -j"$(nproc)" )
+
+  - bundle-linux: |
+      set -eux
+      . "$HOME/.cargo/env"
+
+      cd "$HOME/atray"
+
+      for target in $LINUX_TARGETS; do
+        cargo xtask deb --target "$target" --out dist
+      done
+
+      for deb in dist/*.deb; do
+        dpkg-deb --info "$deb"
+        dpkg-deb --contents "$deb"
+      done
 
   - bundle-macos: |
       set -eux
@@ -127,6 +165,7 @@ tasks:
       done
 
 artifacts:
+  - atray/dist/atray-amd64.deb
   - atray/dist/atray-aarch64.dmg
   - atray/dist/atray-x86_64.dmg
   - atray/dist/atray-aarch64.msi
